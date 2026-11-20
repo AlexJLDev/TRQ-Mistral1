@@ -12,8 +12,11 @@ if ($p === 'settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     foreach (['api_key', 'athlete_id', 'ftp', 'lthr', 'max_hr', 'rest_hr', 'base_hrv', 'weight', 'body_fat'] as $k) {
         cfg_set($k, trim($_POST[$k] ?? ''));
     }
-    cfg_set('ssl_verify', !empty($_POST['ssl_noverify']) ? '0' : '1');
-    cfg_set('ca_bundle', trim($_POST['ca_bundle'] ?? ''));
+    /* SSL : champ présent uniquement dans le POST quand le bloc SSL est affiché (administrateur) */
+    if (array_key_exists('ca_bundle', $_POST)) {
+        cfg_set('ssl_verify', !empty($_POST['ssl_noverify']) ? '0' : '1');
+        cfg_set('ca_bundle', trim($_POST['ca_bundle'] ?? ''));
+    }
     if (preg_match('/^(\d+):(\d{2})$/', trim($_POST['run_thr_pace'] ?? ''), $m)) {
         cfg_set('run_thr_pace', (string)($m[1] * 60 + $m[2]));
     }
@@ -302,11 +305,13 @@ $groups = [
     <footer>
       <?php $cu = current_user(); $ini = mb_strtoupper(mb_substr(trim((string)($cu['name'] ?? '?')) ?: '?', 0, 1)); ?>
       <div class="flex items-center gap-2 px-2 py-1">
-        <span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"><?= h($ini) ?></span>
-        <div class="min-w-0 flex-1 leading-tight">
-          <p class="truncate text-sm font-medium"><?= h($cu['name'] ?? '') ?></p>
-          <p class="truncate text-[11px] text-muted-foreground">FTP <?= h(cfg('ftp', '–')) ?> W<?= cfg('weight') ? ' · ' . h(cfg('weight')) . ' kg' : '' ?></p>
-        </div>
+        <a href="?p=settings" class="flex min-w-0 flex-1 items-center gap-2 -m-1 rounded-md p-1 transition hover:bg-muted" title="Mes paramètres">
+          <span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"><?= h($ini) ?></span>
+          <div class="min-w-0 flex-1 leading-tight">
+            <p class="truncate text-sm font-medium"><?= h($cu['name'] ?? '') ?></p>
+            <p class="truncate text-[11px] text-muted-foreground">FTP <?= h(cfg('ftp', '–')) ?> W<?= cfg('weight') ? ' · ' . h(cfg('weight')) . ' kg' : '' ?></p>
+          </div>
+        </a>
         <?php if (auth_enabled()): ?>
           <form method="post" action="login.php?a=logout">
             <button type="submit" class="btn" data-variant="ghost" data-size="icon-sm" title="Se déconnecter" aria-label="Se déconnecter">
@@ -4646,6 +4651,7 @@ if ($p === 'settings') {
           </div>
         </div>
 
+        <?php if (!auth_enabled() || (($cu['role'] ?? '') === 'admin')): ?>
         <div class="card p-6 space-y-4">
           <header>
             <h3 class="text-base font-semibold">Connexion sécurisée (SSL)</h3>
@@ -4669,6 +4675,7 @@ if ($p === 'settings') {
             <p class="text-[11px] text-muted-foreground">Le test utilise les réglages déjà <b>enregistrés</b> : cliquez d’abord sur « Enregistrer ».</p>
           </div>
         </div>
+        <?php endif; ?>
 
         <div class="card p-6 space-y-4">
           <header>
@@ -4725,56 +4732,6 @@ if ($p === 'settings') {
         </div>
       </form>
 
-      <div class="card p-6 border-dashed">
-        <header class="mb-4">
-          <h3 class="text-base font-semibold">Gestion des données & Démonstration</h3>
-          <p class="text-xs text-muted-foreground">Générez un jeu de données complet ou réinitialisez la base SQLite locale</p>
-        </header>
-        <div class="flex items-center gap-3 flex-wrap">
-          <button class="btn" onclick="call('seed_demo').then(()=>location.href='?p=dashboard')">
-            ✨ Générer jeu de démo complet
-          </button>
-          <button class="btn" data-variant="destructive" onclick="document.getElementById('modal-purge').showModal()">
-            🗑️ Réinitialiser la base
-          </button>
-        </div>
-      </div>
-
-      <dialog class="dialog" id="modal-purge"
-              onpointerdown="this.dataset.backdropPress = event.target === this"
-              onclick="if (event.target === this && this.dataset.backdropPress === 'true') this.close()">
-        <div class="sm:max-w-sm w-full">
-          <header class="flex items-center justify-between pb-3 border-b mb-4">
-            <div>
-              <h3 class="text-base font-semibold">Réinitialiser la base</h3>
-              <p class="text-xs text-muted-foreground">Supprime définitivement vos activités, données bien-être et séances planifiées.</p>
-            </div>
-            <button type="button" class="btn" data-variant="ghost" data-size="icon" onclick="this.closest('dialog').close()">✕</button>
-          </header>
-          <section class="space-y-3">
-            <div class="field">
-              <label class="text-xs font-medium" for="purgePwd">Mot de passe de confirmation</label>
-              <input type="password" id="purgePwd" class="w-full" autocomplete="current-password"
-                     onkeydown="if (event.key === 'Enter') { event.preventDefault(); purgeConfirm(); }">
-            </div>
-          </section>
-          <footer class="flex items-center justify-end gap-2 pt-3 border-t mt-4">
-            <button type="button" class="btn" data-variant="ghost" data-size="sm" onclick="this.closest('dialog').close()">Annuler</button>
-            <button type="button" class="btn" data-variant="destructive" data-size="sm" onclick="purgeConfirm()">Tout supprimer</button>
-          </footer>
-        </div>
-      </dialog>
-      <script>
-      async function purgeConfirm() {
-        const inp = document.getElementById('purgePwd');
-        if (!inp.value) { inp.focus(); return; }
-        try {
-          await call('clear_data', {password: inp.value});
-          location.href = '?p=settings&purged=1';
-        } catch (e) { alert(e.message); }
-        inp.value = '';
-      }
-      </script>
     </div>
     <?php ?>
     <script>
