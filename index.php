@@ -193,9 +193,30 @@ document.write('<link rel="stylesheet" href="assets/vendor/basecoat-' + bcStyle 
 <?= brand_css() ?>
 <script>
 window.__CSRF = document.querySelector('meta[name=csrf-token]').content;
-(function () {                       // jeton CSRF sur tous les fetch() en POST
+(function () {                       // jeton CSRF sur tous les fetch() en POST + barre de chargement pendant les requêtes
   const f = window.fetch;
-  window.fetch = function (u, o) { o = o || {}; if (String(o.method || 'GET').toUpperCase() === 'POST') { const h = new Headers(o.headers || {}); h.set('X-CSRF-Token', window.__CSRF); o.headers = h; } return f.call(this, u, o); };
+  let pending = 0;
+  const bar = () => document.getElementById('topLoader');
+  window.__trqTop = function (on) { const b = bar(); if (b) b.classList.toggle('trq-on', !!on); };
+  window.fetch = function (u, o) {
+    o = o || {};
+    if (String(o.method || 'GET').toUpperCase() === 'POST') { const h = new Headers(o.headers || {}); h.set('X-CSRF-Token', window.__CSRF); o.headers = h; }
+    pending++; window.__trqTop(true);
+    return f.call(this, u, o).finally(() => { pending = Math.max(0, pending - 1); if (!pending) window.__trqTop(false); });
+  };
+})();
+(function () {                       // barre de chargement sur navigations et formulaires
+  const show = () => window.__trqTop && window.__trqTop(true);
+  document.addEventListener('click', function (e) {
+    const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a || a.target || a.hasAttribute('download') || a.getAttribute('href').charAt(0) === '#'
+        || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || a.protocol === 'javascript:') return;
+    if (a.host && a.host !== location.host) return;
+    show();
+  }, true);
+  document.addEventListener('submit', show, true);
+  document.addEventListener('pjax:send', show);
+  window.addEventListener('pageshow', function () { window.__trqTop && window.__trqTop(false); });
 })();
 </script>
 <script src="assets/vendor/tailwind-browser.js"></script>
@@ -271,9 +292,53 @@ tr.lap-flash { animation: lapflash 1.6s ease-out; }
 .dark .leaflet-bar a:hover { background: var(--accent); }
 .dark .leaflet-control-attribution { background: color-mix(in oklab, var(--background) 75%, transparent); color: var(--muted-foreground); }
 .table-container { border: 1px solid var(--border); border-radius: var(--radius); overflow-x: auto; }
+
+/* Barre de chargement top (navigations + requêtes) */
+#topLoader { position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 99998; background: transparent; opacity: 0; pointer-events: none; transition: opacity .15s; }
+#topLoader::before { content: ''; position: absolute; top: 0; bottom: 0; left: -40%; width: 40%; background: var(--primary); border-radius: 999px; animation: trqTopRun 1.1s ease-in-out infinite; }
+#topLoader.trq-on { opacity: 1; }
+@keyframes trqTopRun { 0% { left: -40%; } 100% { left: 100%; } }
+
+/* Écran de démarrage (skeleton) — masque le flash de rendu tant que Tailwind JIT n'a pas fini */
+#bootSkeleton { position: fixed; inset: 0; z-index: 99997; background: var(--background); overflow: hidden; transition: opacity .25s ease; }
+#bootSkeleton.trq-done { opacity: 0; pointer-events: none; }
+#bootSkeleton .skeleton { background: var(--muted); }
+.trq-pulse { animation: trqPulse 1.6s ease-in-out infinite; }
+@keyframes trqPulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
 </style>
 </head>
 <body>
+<div id="topLoader" aria-hidden="true"></div>
+<div id="bootSkeleton" aria-hidden="true">
+  <div class="mx-auto w-full max-w-6xl px-4 py-6 space-y-4">
+    <div class="flex items-center gap-3">
+      <div class="skeleton trq-pulse size-9 rounded-lg"></div>
+      <div class="skeleton trq-pulse h-4 w-36 rounded"></div>
+      <div class="skeleton trq-pulse h-4 w-20 rounded"></div>
+    </div>
+    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="skeleton trq-pulse h-24 rounded-lg"></div>
+      <div class="skeleton trq-pulse h-24 rounded-lg"></div>
+      <div class="skeleton trq-pulse h-24 rounded-lg"></div>
+      <div class="skeleton trq-pulse h-24 rounded-lg"></div>
+    </div>
+    <div class="skeleton trq-pulse h-64 rounded-lg"></div>
+    <div class="grid gap-3 sm:grid-cols-2">
+      <div class="skeleton trq-pulse h-40 rounded-lg"></div>
+      <div class="skeleton trq-pulse h-40 rounded-lg"></div>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  const sk = document.getElementById('bootSkeleton');
+  let finished = false;
+  const done = () => { if (finished || !sk) return; finished = true; sk.classList.add('trq-done'); setTimeout(() => sk.remove(), 350); };
+  window.addEventListener('load', done);
+  window.addEventListener('pageshow', function (e) { if (e.persisted) done(); });
+  setTimeout(done, 2500);                      // filet de sécurité si 'load' traîne (tuile hors ligne, etc.)
+})();
+</script>
 <?php
 $groups = [
     'Analyse'     => ['dashboard', 'activities', 'calendar'],
