@@ -1596,6 +1596,73 @@ if ($p === 'activity') {
         </div>
       <?php endif; ?>
 
+      <!-- Analyse des intervalles & Laps (Tableau) -->
+      <?php if (!empty($laps)): ?>
+        <div class="card">
+          <header class="p-4 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h3 class="text-base font-semibold">Tableau détaillé des tours & intervalles (WKO5 Interval Engine)</h3>
+              <p class="text-xs text-muted-foreground">Statistiques par bloc : puissance normalisée, intensité, réserve W'bal et allures</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="badge" data-variant="secondary"><?= h($lapLabelN) ?></span>
+            </div>
+          </header>
+          <section class="p-0">
+            <div class="table-container border-0 rounded-none">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Type</th>
+                    <th>Durée</th>
+                    <th>Dist.</th>
+                    <th>Puissance</th>
+                    <th>NP</th>
+                    <th>IF</th>
+                    <th>Zone</th>
+                    <th>Vitesse</th>
+                    <th>FC Moy.</th>
+                    <th>FC Max</th>
+                    <th>Cadence</th>
+                    <th>W'bal min</th>
+                    <th>EF</th>
+                    <th>VI</th>
+                    <th>kJ</th>
+                    <?php if ($lapSource === 'manual'): ?><th></th><?php endif; ?>
+                  </tr>
+                </thead>
+                <tbody>
+                  <?php foreach ($laps as $iv): ?>
+                    <tr data-lap="<?= (int)($iv['id'] ?? 0) ?>" class="<?= !empty($iv['is_work']) ? 'bg-primary/5 font-medium' : '' ?>">
+                      <td class="font-bold text-xs"><?= $iv['id'] ?? 1 ?></td>
+                      <td>
+                        <span class="badge <?= !empty($iv['is_work']) ? 'bg-primary/15 text-primary font-semibold' : '' ?>" data-variant="<?= !empty($iv['is_work']) ? 'outline' : 'secondary' ?>"><?= !empty($iv['label']) ? h($iv['label']) : (!empty($iv['is_work']) ? 'Effort' : 'Récup') ?></span>
+                      </td>
+                      <td class="tabular-nums text-xs font-semibold"><?= fmt_dur($iv['duration'] ?? 0) ?></td>
+                      <td class="tabular-nums text-xs"><?= !empty($iv['distance']) ? n($iv['distance'] / 1000, 2) . ' km' : '–' ?></td>
+                      <td class="tabular-nums font-bold text-xs text-cyan-600 dark:text-cyan-400"><?= !empty($iv['avg_w']) ? n($iv['avg_w']) . ' W' : '–' ?></td>
+                      <td class="tabular-nums text-xs"><?= !empty($iv['np']) ? n($iv['np']) . ' W' : '–' ?></td>
+                      <td class="tabular-nums text-xs font-medium"><?= !empty($iv['if_']) ? n($iv['if_'], 2) : '–' ?></td>
+                      <td><span class="badge" data-variant="outline"><?= h($iv['zone'] ?? 'Z1') ?></span></td>
+                      <td class="tabular-nums text-xs"><?= !empty($iv['avg_speed']) ? n($iv['avg_speed'], 1) . ' km/h' : '–' ?></td>
+                      <td class="tabular-nums text-xs"><?= !empty($iv['avg_hr']) ? round($iv['avg_hr']) : '–' ?> bpm</td>
+                      <td class="tabular-nums text-xs"><?= !empty($iv['max_hr']) ? round($iv['max_hr']) : '–' ?> bpm</td>
+                      <td class="tabular-nums text-xs"><?= !empty($iv['cadence']) ? round($iv['cadence']) : '–' ?> rpm</td>
+                      <td class="tabular-nums text-xs text-purple-500 font-medium"><?= isset($iv['min_wbal']) ? $iv['min_wbal'] . ' kJ' : '–' ?></td>
+                      <td class="tabular-nums text-xs"><?= !empty($iv['ef']) ? n($iv['ef'], 2) : '–' ?></td>
+                      <td class="tabular-nums text-xs"><?= !empty($iv['vi']) ? n($iv['vi'], 2) : '–' ?></td>
+                      <td class="tabular-nums text-xs"><?= n($iv['kj'] ?? 0) ?></td>
+                      <?php if ($lapSource === 'manual'): ?><td><button type="button" class="btn" data-size="icon-sm" data-variant="ghost" title="Supprimer ce tour" aria-label="Supprimer ce tour" onclick="deleteLap(<?= (int)$iv['id'] ?>)">🗑</button></td><?php endif; ?>
+                    </tr>
+                  <?php endforeach; ?>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      <?php endif; ?>
+
       <!-- Grille Télémétrique Approfondie WKO5 (Protégée contre tout Undefined array key) -->
       <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
         <!-- Bloc Puissance WKO5 -->
@@ -1710,215 +1777,6 @@ if ($p === 'activity') {
           </div>
         </div>
       </div>
-
-      <!-- Analyse des intervalles & Laps (Tableau) -->
-      <?php if (!empty($laps)): ?>
-        <div class="card">
-          <header class="p-4 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <h3 class="text-base font-semibold">Tableau détaillé des tours & intervalles (WKO5 Interval Engine)</h3>
-              <p class="text-xs text-muted-foreground">Statistiques par bloc : puissance normalisée, intensité, réserve W'bal et allures</p>
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="badge" data-variant="secondary"><?= h($lapLabelN) ?></span>
-            </div>
-          </header>
-          <section class="p-0">
-            <div class="table-container border-0 rounded-none">
-              <table class="table">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Type</th>
-                    <th>Durée</th>
-                    <th>Dist.</th>
-                    <th>Puissance</th>
-                    <th>NP</th>
-                    <th>IF</th>
-                    <th>Zone</th>
-                    <th>Vitesse</th>
-                    <th>FC Moy.</th>
-                    <th>FC Max</th>
-                    <th>Cadence</th>
-                    <th>W'bal min</th>
-                    <th>EF</th>
-                    <th>VI</th>
-                    <th>kJ</th>
-                    <?php if ($lapSource === 'manual'): ?><th></th><?php endif; ?>
-                  </tr>
-                </thead>
-                <tbody>
-                  <?php foreach ($laps as $iv): ?>
-                    <tr data-lap="<?= (int)($iv['id'] ?? 0) ?>" class="<?= !empty($iv['is_work']) ? 'bg-primary/5 font-medium' : '' ?>">
-                      <td class="font-bold text-xs"><?= $iv['id'] ?? 1 ?></td>
-                      <td>
-                        <span class="badge <?= !empty($iv['is_work']) ? 'bg-primary/15 text-primary font-semibold' : '' ?>" data-variant="<?= !empty($iv['is_work']) ? 'outline' : 'secondary' ?>"><?= !empty($iv['label']) ? h($iv['label']) : (!empty($iv['is_work']) ? 'Effort' : 'Récup') ?></span>
-                      </td>
-                      <td class="tabular-nums text-xs font-semibold"><?= fmt_dur($iv['duration'] ?? 0) ?></td>
-                      <td class="tabular-nums text-xs"><?= !empty($iv['distance']) ? n($iv['distance'] / 1000, 2) . ' km' : '–' ?></td>
-                      <td class="tabular-nums font-bold text-xs text-cyan-600 dark:text-cyan-400"><?= !empty($iv['avg_w']) ? n($iv['avg_w']) . ' W' : '–' ?></td>
-                      <td class="tabular-nums text-xs"><?= !empty($iv['np']) ? n($iv['np']) . ' W' : '–' ?></td>
-                      <td class="tabular-nums text-xs font-medium"><?= !empty($iv['if_']) ? n($iv['if_'], 2) : '–' ?></td>
-                      <td><span class="badge" data-variant="outline"><?= h($iv['zone'] ?? 'Z1') ?></span></td>
-                      <td class="tabular-nums text-xs"><?= !empty($iv['avg_speed']) ? n($iv['avg_speed'], 1) . ' km/h' : '–' ?></td>
-                      <td class="tabular-nums text-xs"><?= !empty($iv['avg_hr']) ? round($iv['avg_hr']) : '–' ?> bpm</td>
-                      <td class="tabular-nums text-xs"><?= !empty($iv['max_hr']) ? round($iv['max_hr']) : '–' ?> bpm</td>
-                      <td class="tabular-nums text-xs"><?= !empty($iv['cadence']) ? round($iv['cadence']) : '–' ?> rpm</td>
-                      <td class="tabular-nums text-xs text-purple-500 font-medium"><?= isset($iv['min_wbal']) ? $iv['min_wbal'] . ' kJ' : '–' ?></td>
-                      <td class="tabular-nums text-xs"><?= !empty($iv['ef']) ? n($iv['ef'], 2) : '–' ?></td>
-                      <td class="tabular-nums text-xs"><?= !empty($iv['vi']) ? n($iv['vi'], 2) : '–' ?></td>
-                      <td class="tabular-nums text-xs"><?= n($iv['kj'] ?? 0) ?></td>
-                      <?php if ($lapSource === 'manual'): ?><td><button type="button" class="btn" data-size="icon-sm" data-variant="ghost" title="Supprimer ce tour" aria-label="Supprimer ce tour" onclick="deleteLap(<?= (int)$iv['id'] ?>)">🗑</button></td><?php endif; ?>
-                    </tr>
-                  <?php endforeach; ?>
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </div>
-      <?php endif; ?>
-
-      <!-- Graphique PDC de la séance vs Meilleure PDC 90j de la saison -->
-      <div class="grid lg:grid-cols-2 gap-6">
-        <div class="card">
-          <header class="p-4 border-b">
-            <h3 class="text-base font-semibold">MMP de la séance vs Record 90 jours (WKO5)</h3>
-            <p class="text-xs text-muted-foreground">Comparaison de vos meilleurs efforts de la séance face à votre enveloppe de saison</p>
-          </header>
-          <section class="p-4">
-            <div class="h-64"><canvas id="mmpCompare"></canvas></div>
-          </section>
-        </div>
-
-        <!-- Zones de puissance & Polarisation -->
-        <div class="card">
-          <header class="p-4 border-b flex items-center justify-between">
-            <div>
-              <h3 class="text-base font-semibold">Distribution temporelle des zones (Coggan)</h3>
-              <p class="text-xs text-muted-foreground">Temps passé dans chaque zone d'entraînement</p>
-            </div>
-            <?php if (!empty($wko['polarization']['low'])): ?>
-              <span class="text-[11px] text-muted-foreground">
-                Basse: <?= $wko['polarization']['low'] ?>% · Moy: <?= $wko['polarization']['mid'] ?>% · Haute: <?= $wko['polarization']['high'] ?>%
-              </span>
-            <?php endif; ?>
-          </header>
-          <section class="p-4">
-            <div class="h-64"><canvas id="zonesChart"></canvas></div>
-          </section>
-        </div>
-      </div>
-
-<!-- Histogrammes de distribution en pic par type de donnée -->
-      <?php $peaks = !empty($S) ? peak_histograms($S, (float)$ftp) : []; ?>
-      <?php if (array_filter($peaks)): ?>
-      <div class="card" id="peakHistCard">
-        <header class="p-4 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div>
-            <h3 class="text-base font-semibold">Distribution en pic par type de données</h3>
-            <p class="text-xs text-muted-foreground">Temps passé (MM:SS) dans chaque plage de valeurs au cours de la séance</p>
-          </div>
-          <span class="badge" data-variant="secondary">Histogrammes 1 Hz</span>
-        </header>
-        <section class="p-4">
-          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            <?php
-            $peakMeta = [
-                'power'   => ['title' => 'Puissance', 'color' => '#8b5cf6', 'unit' => 'W',    'dec' => 0],
-                'torque'  => ['title' => 'Couple',    'color' => '#c026d3', 'unit' => 'N.m',  'dec' => 0],
-                'hr'      => ['title' => 'FC',        'color' => '#be3a68', 'unit' => 'bpm',  'dec' => 0],
-                'speed'   => ['title' => 'Vitesse',   'color' => '#4db6ac', 'unit' => 'km/h', 'dec' => 1],
-                'cadence' => ['title' => 'Cadence',   'color' => '#c8963e', 'unit' => 'rpm',  'dec' => 0],
-                'grade'   => ['title' => 'Pente',     'color' => '#14b8a6', 'unit' => '%',    'dec' => 1],
-            ];
-            foreach ($peakMeta as $key => $meta):
-                if (empty($peaks[$key])) continue;
-            ?>
-              <div class="rounded-lg border bg-muted/15 p-3">
-                <div class="text-center text-xs font-semibold mb-2"><?= h($meta['title']) ?></div>
-                <div class="h-52 w-full"><canvas id="peakHist_<?= $key ?>"></canvas></div>
-              </div>
-            <?php endforeach; ?>
-          </div>
-        </section>
-      </div>
-
-      <script>
-      (function () {
-        const PEAKS = <?= json_encode($peaks) ?>;
-        const META = <?= json_encode($peakMeta) ?>;
-        const dark = document.documentElement.classList.contains('dark');
-        const gridCol = dark ? 'rgba(148,163,184,0.14)' : 'rgba(100,116,139,0.18)';
-        const txtCol = dark ? '#9ca3af' : '#64748b';
-
-        const fmtMmSs = sec => {
-          sec = Math.max(0, Math.round(sec));
-          const h = Math.floor(sec / 3600);
-          const m = Math.floor((sec % 3600) / 60);
-          const s = sec % 60;
-          if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-          return `${m}:${String(s).padStart(2, '0')}`;
-        };
-
-        Object.keys(META).forEach(key => {
-          const d = PEAKS[key];
-          const m = META[key];
-          const el = document.getElementById('peakHist_' + key);
-          if (!d || !el) return;
-
-          const fmtVal = v => m.dec > 0 ? Number(v).toFixed(m.dec) : String(Math.round(v));
-          const xLabels = d.labels.map(pair => fmtVal(pair[0]));
-          const ranges = d.labels.map(pair => `${fmtVal(pair[0])} – ${fmtVal(pair[1])} ${m.unit}`);
-
-          new Chart(el, {
-            type: 'bar',
-            data: {
-              labels: xLabels,
-              datasets: [{
-                label: m.title,
-                data: d.sec,
-                backgroundColor: m.color,
-                borderWidth: 0,
-                borderRadius: 1,
-                barPercentage: 0.92,
-                categoryPercentage: 0.94
-              }]
-            },
-            options: {
-              maintainAspectRatio: false,
-              animation: false,
-              plugins: {
-                legend: { display: false },
-                tooltip: {
-                  callbacks: {
-                    title: items => items[0] ? `${m.title} : ${ranges[items[0].dataIndex]}` : '',
-                    label: ctx => ` Durée : ${fmtMmSs(ctx.parsed.y)} (${ctx.parsed.y}s)`
-                  }
-                }
-              },
-              scales: {
-                x: {
-                  grid: { display: false },
-                  ticks: { color: txtCol, font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 11 }
-                },
-                y: {
-                  beginAtZero: true,
-                  grid: { color: gridCol },
-                  ticks: {
-                    color: txtCol,
-                    font: { size: 10 },
-                    maxTicksLimit: 6,
-                    callback: v => fmtMmSs(v)
-                  }
-                }
-              }
-            }
-          });
-        });
-      })();
-      </script>
-      <?php endif; ?>
-
 
       <!-- Graphiques Puissance/FC & Dérive Puissance-FC -->
       <?php if (!empty($powerSeries) && !empty($hrSeries)):
@@ -2134,6 +1992,148 @@ if ($p === 'activity') {
       })();
       </script>
       <?php endif; ?>
+      <!-- Graphique PDC de la séance vs Meilleure PDC 90j de la saison -->
+      <div class="grid lg:grid-cols-2 gap-6">
+        <div class="card">
+          <header class="p-4 border-b">
+            <h3 class="text-base font-semibold">MMP de la séance vs Record 90 jours (WKO5)</h3>
+            <p class="text-xs text-muted-foreground">Comparaison de vos meilleurs efforts de la séance face à votre enveloppe de saison</p>
+          </header>
+          <section class="p-4">
+            <div class="h-64"><canvas id="mmpCompare"></canvas></div>
+          </section>
+        </div>
+
+        <!-- Zones de puissance & Polarisation -->
+        <div class="card">
+          <header class="p-4 border-b flex items-center justify-between">
+            <div>
+              <h3 class="text-base font-semibold">Distribution temporelle des zones (Coggan)</h3>
+              <p class="text-xs text-muted-foreground">Temps passé dans chaque zone d'entraînement</p>
+            </div>
+            <?php if (!empty($wko['polarization']['low'])): ?>
+              <span class="text-[11px] text-muted-foreground">
+                Basse: <?= $wko['polarization']['low'] ?>% · Moy: <?= $wko['polarization']['mid'] ?>% · Haute: <?= $wko['polarization']['high'] ?>%
+              </span>
+            <?php endif; ?>
+          </header>
+          <section class="p-4">
+            <div class="h-64"><canvas id="zonesChart"></canvas></div>
+          </section>
+        </div>
+      </div>
+
+<!-- Histogrammes de distribution en pic par type de donnée -->
+      <?php $peaks = !empty($S) ? peak_histograms($S, (float)$ftp) : []; ?>
+      <?php if (array_filter($peaks)): ?>
+      <div class="card" id="peakHistCard">
+        <header class="p-4 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="text-base font-semibold">Distribution en pic par type de données</h3>
+            <p class="text-xs text-muted-foreground">Temps passé (MM:SS) dans chaque plage de valeurs au cours de la séance</p>
+          </div>
+          <span class="badge" data-variant="secondary">Histogrammes 1 Hz</span>
+        </header>
+        <section class="p-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <?php
+            $peakMeta = [
+                'power'   => ['title' => 'Puissance', 'color' => '#8b5cf6', 'unit' => 'W',    'dec' => 0],
+                'torque'  => ['title' => 'Couple',    'color' => '#c026d3', 'unit' => 'N.m',  'dec' => 0],
+                'hr'      => ['title' => 'FC',        'color' => '#be3a68', 'unit' => 'bpm',  'dec' => 0],
+                'speed'   => ['title' => 'Vitesse',   'color' => '#4db6ac', 'unit' => 'km/h', 'dec' => 1],
+                'cadence' => ['title' => 'Cadence',   'color' => '#c8963e', 'unit' => 'rpm',  'dec' => 0],
+                'grade'   => ['title' => 'Pente',     'color' => '#14b8a6', 'unit' => '%',    'dec' => 1],
+            ];
+            foreach ($peakMeta as $key => $meta):
+                if (empty($peaks[$key])) continue;
+            ?>
+              <div class="rounded-lg border bg-muted/15 p-3">
+                <div class="text-center text-xs font-semibold mb-2"><?= h($meta['title']) ?></div>
+                <div class="h-52 w-full"><canvas id="peakHist_<?= $key ?>"></canvas></div>
+              </div>
+            <?php endforeach; ?>
+          </div>
+        </section>
+      </div>
+
+      <script>
+      (function () {
+        const PEAKS = <?= json_encode($peaks) ?>;
+        const META = <?= json_encode($peakMeta) ?>;
+        const dark = document.documentElement.classList.contains('dark');
+        const gridCol = dark ? 'rgba(148,163,184,0.14)' : 'rgba(100,116,139,0.18)';
+        const txtCol = dark ? '#9ca3af' : '#64748b';
+
+        const fmtMmSs = sec => {
+          sec = Math.max(0, Math.round(sec));
+          const h = Math.floor(sec / 3600);
+          const m = Math.floor((sec % 3600) / 60);
+          const s = sec % 60;
+          if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+          return `${m}:${String(s).padStart(2, '0')}`;
+        };
+
+        Object.keys(META).forEach(key => {
+          const d = PEAKS[key];
+          const m = META[key];
+          const el = document.getElementById('peakHist_' + key);
+          if (!d || !el) return;
+
+          const fmtVal = v => m.dec > 0 ? Number(v).toFixed(m.dec) : String(Math.round(v));
+          const xLabels = d.labels.map(pair => fmtVal(pair[0]));
+          const ranges = d.labels.map(pair => `${fmtVal(pair[0])} – ${fmtVal(pair[1])} ${m.unit}`);
+
+          new Chart(el, {
+            type: 'bar',
+            data: {
+              labels: xLabels,
+              datasets: [{
+                label: m.title,
+                data: d.sec,
+                backgroundColor: m.color,
+                borderWidth: 0,
+                borderRadius: 1,
+                barPercentage: 0.92,
+                categoryPercentage: 0.94
+              }]
+            },
+            options: {
+              maintainAspectRatio: false,
+              animation: false,
+              plugins: {
+                legend: { display: false },
+                tooltip: {
+                  callbacks: {
+                    title: items => items[0] ? `${m.title} : ${ranges[items[0].dataIndex]}` : '',
+                    label: ctx => ` Durée : ${fmtMmSs(ctx.parsed.y)} (${ctx.parsed.y}s)`
+                  }
+                }
+              },
+              scales: {
+                x: {
+                  grid: { display: false },
+                  ticks: { color: txtCol, font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 11 }
+                },
+                y: {
+                  beginAtZero: true,
+                  grid: { color: gridCol },
+                  ticks: {
+                    color: txtCol,
+                    font: { size: 10 },
+                    maxTicksLimit: 6,
+                    callback: v => fmtMmSs(v)
+                  }
+                }
+              }
+            }
+          });
+        });
+      })();
+      </script>
+      <?php endif; ?>
+
+
     </div>
 
     <script>
