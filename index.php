@@ -1201,15 +1201,16 @@ if ($p === 'activity') {
 
 
       
-      <div class="tabs w-full" id="actTabs">
-        <nav role="tablist" aria-orientation="horizontal" class="w-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <button type="button" role="tab" id="act-tab-synthese" aria-controls="act-panel-synthese" aria-selected="true" tabindex="0" class="shrink-0 whitespace-nowrap">📋 Synthèse</button>
-          <button type="button" role="tab" id="act-tab-telem" aria-controls="act-panel-telem" aria-selected="false" tabindex="-1" class="shrink-0 whitespace-nowrap">📈 Télémétrie</button>
-          <?php if (!empty($laps)): ?><button type="button" role="tab" id="act-tab-intervalles" aria-controls="act-panel-intervalles" aria-selected="false" tabindex="-1" class="shrink-0 whitespace-nowrap">🔁 Intervalles</button><?php endif; ?>
-          <button type="button" role="tab" id="act-tab-analyses" aria-controls="act-panel-analyses" aria-selected="false" tabindex="-1" class="shrink-0 whitespace-nowrap">🔬 Analyses avancées</button>
-          <button type="button" role="tab" id="act-tab-distributions" aria-controls="act-panel-distributions" aria-selected="false" tabindex="-1" class="shrink-0 whitespace-nowrap">📊 Distributions</button>
-        </nav>
-        <div role="tabpanel" id="act-panel-synthese" aria-labelledby="act-tab-synthese" tabindex="-1" aria-selected="true" class="space-y-6">
+      <nav id="actAnchorBar" aria-label="Sommaire de la séance" class="sticky top-14 z-30 flex items-center gap-1 overflow-x-auto rounded-lg border bg-background/95 px-1.5 py-1.5 shadow-xs backdrop-blur [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <a href="#sec-synthese" class="act-anchor shrink-0 whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground">📋 Synthèse</a>
+        <a href="#sec-parcours" class="act-anchor shrink-0 whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground">🗺️ Parcours</a>
+        <a href="#sec-telemetrie" class="act-anchor shrink-0 whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground">📈 Télémétrie</a>
+        <?php if (!empty($laps)): ?><a href="#sec-intervalles" class="act-anchor shrink-0 whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground">🔁 Intervalles</a><?php endif; ?>
+        <a href="#sec-analyses" class="act-anchor shrink-0 whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground">🔬 Analyses avancées</a>
+        <a href="#sec-distributions" class="act-anchor shrink-0 whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground">📊 Distributions</a>
+      </nav>
+
+      <div id="sec-synthese" class="space-y-6 scroll-mt-24">
 
       <!-- Nutrition (statement UCI 2026) -->
       <?php $nutPlan = nutrition_session_plan($a, nutrition_weight(), (float)$ftp); $nob = $nutPlan['onbike']; $nutPost = $nutPlan['post']; ?>
@@ -1364,8 +1365,9 @@ if ($p === 'activity') {
       async function planUnlink(planId) { try { await call('plan_unlink', {plan_id: planId}); location.reload(); } catch (e) { alert(e.message); } }
       </script>
 
-        </div>
-        <div role="tabpanel" id="act-panel-telem" aria-labelledby="act-tab-telem" tabindex="-1" class="space-y-6" hidden>
+      </div>
+
+      <div id="sec-parcours" class="space-y-6 scroll-mt-24">
 
       <!-- Aperçu du parcours (carte) -->
       <?php if ($showMap): ?>
@@ -1394,6 +1396,9 @@ if ($p === 'activity') {
           </section>
         </div>
       <?php endif; ?>
+      </div>
+
+      <div id="sec-telemetrie" class="space-y-6 scroll-mt-24">
 
       <!-- Graphique Multi-Flux Télémétrique Moderne avec sélecteur de flux & Switcher Empilé / Unique -->
       <div class="card">
@@ -1596,9 +1601,10 @@ if ($p === 'activity') {
         </section>
       </div>
 
-        </div>
-        <?php if (!empty($laps)): ?>
-        <div role="tabpanel" id="act-panel-intervalles" aria-labelledby="act-tab-intervalles" tabindex="-1" class="space-y-6" hidden>
+      </div>
+
+      <?php if (!empty($laps)): ?>
+      <div id="sec-intervalles" class="space-y-6 scroll-mt-24">
 
       <!-- Graphique par tour (laps appareil / intervals.icu, intervalles détectés, ou splits 1 km en course) -->
       <?php if (!empty($laps)): ?>
@@ -1688,9 +1694,10 @@ if ($p === 'activity') {
         </div>
       <?php endif; ?>
 
-        </div>
-        <?php endif; ?>
-        <div role="tabpanel" id="act-panel-analyses" aria-labelledby="act-tab-analyses" tabindex="-1" class="space-y-6" hidden>
+      </div>
+      <?php endif; ?>
+
+      <div id="sec-analyses" class="space-y-6 scroll-mt-24">
 
       <!-- Grille Télémétrique Approfondie WKO5 (Protégée contre tout Undefined array key) -->
       <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -2021,8 +2028,9 @@ if ($p === 'activity') {
       })();
       </script>
       <?php endif; ?>
-        </div>
-        <div role="tabpanel" id="act-panel-distributions" aria-labelledby="act-tab-distributions" tabindex="-1" class="space-y-6" hidden>
+      </div>
+
+      <div id="sec-distributions" class="space-y-6 scroll-mt-24">
 
       <!-- Graphique PDC de la séance vs Meilleure PDC 90j de la saison -->
       <div class="grid lg:grid-cols-2 gap-6">
@@ -2164,8 +2172,6 @@ if ($p === 'activity') {
       })();
       </script>
       <?php endif; ?>
-
-        </div>
       </div>
 
     </div>
@@ -2997,45 +3003,30 @@ const IS_RUN_PAGE = <?= $isRun ? 'true' : 'false' ?>;
     </script>
     <script>
     (function () {
-      const root = document.getElementById('actTabs');
-      if (!root) return;
-      const sync = target => {
-        root.querySelectorAll('[role=tabpanel]').forEach(p => {
-          const on = p.id === target;
-          p.toggleAttribute('hidden', !on);
-          p.setAttribute('aria-selected', on ? 'true' : 'false');
-        });
-        root.querySelectorAll('[role=tab]').forEach(t => {
-          const on = t.getAttribute('aria-controls') === target;
-          t.setAttribute('aria-selected', on ? 'true' : 'false');
-          t.setAttribute('tabindex', on ? '0' : '-1');
-        });
-      };
-      const show = target => {
-        sync(target);
-        requestAnimationFrame(() => {
-          const panel = document.getElementById(target);
-          if (!panel) return;
-          panel.querySelectorAll('canvas').forEach(cv => { const c = window.Chart && Chart.getChart(cv); if (c) { c.resize(); c.update('none'); } });
-          if (target === 'act-panel-telem' && window.trqMap) {
-            window.trqMap.invalidateSize();
-            if (window.trqMapFit && !window.trqMap._trqFit) { window.trqMap._trqFit = true; window.trqMapFit(); }
-          }
-          const h = location.hash ? document.querySelector(location.hash) : null;
-          if (h && h.closest('[role=tabpanel]') === panel) h.scrollIntoView({ block: 'start' });
+      const bar = document.getElementById('actAnchorBar');
+      if (!bar) return;
+      const links = [...bar.querySelectorAll('a')];
+      bar.addEventListener('click', ev => {
+        const a = ev.target.closest('a');
+        if (!a) return;
+        const el = document.querySelector(a.getAttribute('href'));
+        if (!el) return;
+        ev.preventDefault();
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        history.replaceState(null, '', a.getAttribute('href'));
+      });
+      const secs = links.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+      const mark = () => {
+        let cur = secs[0];
+        for (const s of secs) { if (s.getBoundingClientRect().top <= 110) cur = s; }
+        links.forEach(a => {
+          const on = cur && a.getAttribute('href') === '#' + cur.id;
+          a.classList.toggle('bg-muted', !!on);
+          a.classList.toggle('text-foreground', !!on);
         });
       };
-      root.querySelectorAll('[role=tab]').forEach(btn => btn.addEventListener('click', () => {
-        const target = btn.getAttribute('aria-controls');
-        if (target) show(target);
-      }));
-      let initPanel = 'act-panel-synthese';
-      try {
-        const h = location.hash ? document.querySelector(location.hash) : null;
-        const hp = h ? h.closest('[role=tabpanel]') : null;
-        if (hp) initPanel = hp.id;
-      } catch (e) {}
-      show(initPanel);
+      addEventListener('scroll', mark, { passive: true });
+      mark();
     })();
     </script>
     <?php foot(); exit;
