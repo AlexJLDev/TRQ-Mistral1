@@ -119,6 +119,13 @@ try {
         $laps = custom_lap_add((string)$_POST['id'], (int)$_POST['start'], (int)$_POST['end'], (string)($_POST['label'] ?? ''), (int)($_POST['is_work'] ?? 1));
         echo json_encode(['ok' => true, 'count' => count($laps)]);
 
+    } elseif ($action === 'activity_rename') {
+        $rid = (string)($_POST['id'] ?? '');
+        $rname = trim((string)($_POST['name'] ?? ''));
+        if ($rid === '' || $rname === '' || mb_strlen($rname) > 120) throw new RuntimeException('Nom invalide.');
+        db()->prepare('UPDATE activities SET name=? WHERE id=?')->execute([$rname, $rid]);
+        echo json_encode(['ok' => true, 'name' => $rname]);
+
     } elseif ($action === 'lap_delete') {
         $laps = custom_lap_delete((string)$_POST['id'], (int)$_POST['lap']);
         echo json_encode(['ok' => true, 'count' => count($laps)]);

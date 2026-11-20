@@ -1164,15 +1164,50 @@ if ($p === 'activity') {
 
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b pb-4">
         <div>
-          <h1 class="text-2xl font-bold tracking-tight"><?= h($a['name'] ?: $a['type']) ?></h1>
+          <div class="flex items-center gap-1.5">
+            <h1 class="text-2xl font-bold tracking-tight" id="actName"><?= h($a['name'] ?: $a['type']) ?></h1>
+            <button type="button" class="btn" data-variant="ghost" data-size="icon-sm" aria-label="Renommer la séance" title="Renommer la séance" onclick="actEditName()">
+              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></svg>
+            </button>
+          </div>
           <p class="text-xs text-muted-foreground mt-1">
             <?= h($a['date']) ?> · Analysée le <?= date('Y-m-d') ?>
           </p>
+          <div id="actNameEdit" class="hidden mt-1.5 flex items-center gap-2">
+            <input id="actNameInput" class="input h-8 w-64 text-sm" maxlength="120" value="<?= h($a['name']) ?>" placeholder="Nom de la séance"
+                   onkeydown="if (event.key === 'Enter') { event.preventDefault(); actSaveName(); } else if (event.key === 'Escape') { actCancelName(); }">
+            <button type="button" class="btn" data-size="sm" onclick="actSaveName()">Enregistrer</button>
+            <button type="button" class="btn" data-variant="outline" data-size="sm" onclick="actCancelName()">Annuler</button>
+          </div>
         </div>
         <div class="flex items-center gap-2">
           <button class="btn" data-variant="outline" data-size="sm" onclick="window.print()">Imprimer rapport</button>
         </div>
       </div>
+
+      <script>
+      function actEditName() {
+        const inp = document.getElementById('actNameInput');
+        inp.value = document.getElementById('actName').textContent;
+        document.getElementById('actName').classList.add('hidden');
+        document.getElementById('actNameEdit').classList.remove('hidden');
+        inp.focus(); inp.select();
+      }
+      function actCancelName() {
+        document.getElementById('actName').classList.remove('hidden');
+        document.getElementById('actNameEdit').classList.add('hidden');
+      }
+      async function actSaveName() {
+        const inp = document.getElementById('actNameInput');
+        const name = inp.value.trim();
+        if (!name) return;
+        try {
+          const r = await call('activity_rename', {id: <?= json_encode($a['id']) ?>, name});
+          document.getElementById('actName').textContent = (r && r.name) || name;
+          actCancelName();
+        } catch (e) { alert(e.message); }
+      }
+      </script>
 
       <!-- Métriques phares WKO5 & TrainingPeaks -->
       <?php
