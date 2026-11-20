@@ -36,19 +36,19 @@ function pr_update(array $store, int $dur, float $val, array $meta): array {
     return $store;
 }
 
-/** Records personnels (puissance vélo, FC tous sports) — scan incrémental, cache dans settings(pr_cache). */
+/** Records personnels (puissance vélo, FC tous sports) — scan incrémental par lots (max 60 séances/requête pour éviter la latence), cache dans settings(pr_cache). */
 function progress_prs(): array {
     $cache = json_decode((string)cfg('pr_cache', ''), true);
     if (!is_array($cache)) $cache = [];
     $lastId = (int)($cache['last_id'] ?? 0);
     $pw = is_array($cache['pw'] ?? null) ? $cache['pw'] : [];
     $ph = is_array($cache['hr'] ?? null) ? $cache['hr'] : [];
-    $dirty = false;
 
-    $st = db()->prepare('SELECT id, substr(date,1,10) d, sport, name, streams FROM activities WHERE id > ? AND streams IS NOT NULL ORDER BY id');
+    $pdo = db();
+    $st = $pdo->prepare('SELECT id, substr(date,1,10) d, sport, name, streams FROM activities WHERE id > ? AND streams IS NOT NULL ORDER BY id LIMIT 60');
     $st->execute([$lastId]);
-    foreach ($st->fetchAll() as $r) {
-        $dirty = true;
+    $rows = $st->fetchAll();
+    foreach ($rows as $r) {
         $lastId = (int)$r['id'];
         $S = @json_decode((string)@gzuncompress((string)$r['streams']), true);
         if (!is_array($S)) continue;
@@ -68,8 +68,9 @@ function progress_prs(): array {
             }
         }
     }
-    if ($dirty) cfg_set('pr_cache', json_encode(['last_id' => $lastId, 'pw' => $pw, 'hr' => $ph]));
-    return ['pw' => $pw, 'hr' => $ph];
+    if ($rows) cfg_set('pr_cache', json_encode(['last_id' => $lastId, 'pw' => $pw, 'hr' => $ph]));
+    $pending = (int)$pdo->query("SELECT COUNT(*) FROM activities WHERE id > " . ((int)$lastId) . " AND streams IS NOT NULL")->fetchColumn();
+    return ['pw' => $pw, 'hr' => $ph, 'pending' => $pending];
 }
 
 /** Agrégats par semaine (semaines lundi → dimanche, côté PHP) sur les $count dernières semaines. */

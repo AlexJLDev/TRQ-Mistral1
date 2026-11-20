@@ -4311,6 +4311,12 @@ if ($p === 'progress') {
       </div>
 
       <!-- Records personnels -->
+      <?php if (!empty($prs['pending'])): ?>
+        <div class="alert">
+          <h3>Analyse des flux en cours</h3>
+          <p class="text-xs text-muted-foreground"><?= (int)$prs['pending'] ?> séance(s) restante(s) à analyser pour les records (60 par chargement, pour ne pas ralentir la page). Recharge dans quelques instants pour la suite.</p>
+        </div>
+      <?php endif; ?>
       <div class="grid lg:grid-cols-2 gap-6" id="prCard">
         <?php foreach ([['key' => 'pw', 'title' => 'Puissance (vélo)', 'lab' => PR_POWER_LABELS, 'unit' => ' W'], ['key' => 'hr', 'title' => 'Fréquence cardiaque', 'lab' => PR_HR_LABELS, 'unit' => ' bpm']] as $grp): $store = $prs[$grp['key']] ?? []; ?>
         <div class="card">

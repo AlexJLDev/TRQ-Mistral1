@@ -969,10 +969,14 @@ function analyze(array $a, array $S): array {
 
 /** Charge PMC : CTL (42 j), ATL (7 j), TSB, avec décomposition par sport */
 function pmc(?string $sport = null): array {
+    static $memo = [];
+    $key = $sport ?? '__all__';
+    if (array_key_exists($key, $memo)) return $memo[$key];
+
     $pdo = db();
     $sql = 'SELECT substr(date,1,10) d, sport, SUM(COALESCE(tss,0)) t FROM activities GROUP BY d, sport ORDER BY d';
     $rows = $pdo->query($sql)->fetchAll();
-    if (!$rows) return [];
+    if (!$rows) return $memo[$key] = [];
 
     $byDate = [];
     foreach ($rows as $r) {
@@ -1007,7 +1011,7 @@ function pmc(?string $sport = null): array {
             'tsb' => round($tsb, 1)
         ];
     }
-    return $res;
+    return $memo[$key] = $res;
 }
 
 
