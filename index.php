@@ -1175,14 +1175,22 @@ if ($p === 'activity') {
       </div>
 
       <!-- Métriques phares WKO5 & TrainingPeaks -->
-      <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+      <?php
+      $icoDur = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
+      $icoDist = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><circle cx="18" cy="5" r="3"/><path d="M12.5 19h4.5a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h3"/></svg>';
+      $icoLoad = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>';
+      $icoPwr = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>';
+      $icoHr = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/></svg>';
+      $icoEnr = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>';
+      ?>
+      <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 md:gap-4">
         <?php
-        stat_card('Durée', fmt_dur_full((int)$a['duration']));
-        stat_card('Distance', n($a['distance'] / 1000, 1) . ' km', $isRun ? pace((float)$a['avg_speed']) . ' /km' : n($a['avg_speed'] * 3.6, 1) . ' km/h');
-        stat_card('Charge & IF', n($a['tss']) . ' TSS', 'IF : ' . n($a['if_'], 2));
-        stat_card($isRun ? 'Puissance moy.' : 'Normalized Power', n($a['np'] ?: $a['avg_w']) . ' W', 'Moyenne : ' . n($a['avg_w']) . ' W · VI ' . n($a['vi'], 2));
-        stat_card('FC Moy. / Max', ($a['avg_hr'] ? round($a['avg_hr']) . ' bpm' : '–'), $a['max_hr'] ? 'Max : ' . round($a['max_hr']) . ' bpm' : '');
-        stat_card('Énergie & D+', n($a['elev']) . ' m D+', n($a['kj']) . ' kJ (' . n($a['kj'] ? $a['kj'] * 1.05 : 0) . ' kcal)');
+        stat_card('Durée', fmt_dur_full((int)$a['duration']), '', '<span class="inline-flex items-center justify-center size-6 rounded-md bg-sky-500/10 text-sky-600 dark:text-sky-400 shrink-0">' . $icoDur . '</span>');
+        stat_card('Distance', n($a['distance'] / 1000, 1) . ' km', $isRun ? pace((float)$a['avg_speed']) . ' /km' : n($a['avg_speed'] * 3.6, 1) . ' km/h', '<span class="inline-flex items-center justify-center size-6 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">' . $icoDist . '</span>');
+        stat_card('Charge & IF', n($a['tss']) . ' TSS', 'IF : ' . n($a['if_'], 2), '<span class="inline-flex items-center justify-center size-6 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">' . $icoLoad . '</span>');
+        stat_card($isRun ? 'Puissance moy.' : 'Normalized Power', n($a['np'] ?: $a['avg_w']) . ' W', 'Moyenne : ' . n($a['avg_w']) . ' W · VI ' . n($a['vi'], 2), '<span class="inline-flex items-center justify-center size-6 rounded-md bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 shrink-0">' . $icoPwr . '</span>');
+        stat_card('FC Moy. / Max', ($a['avg_hr'] ? round($a['avg_hr']) . ' bpm' : '–'), $a['max_hr'] ? 'Max : ' . round($a['max_hr']) . ' bpm' : '', '<span class="inline-flex items-center justify-center size-6 rounded-md bg-rose-500/10 text-rose-600 dark:text-rose-400 shrink-0">' . $icoHr . '</span>');
+        stat_card('Énergie & D+', n($a['elev']) . ' m D+', n($a['kj']) . ' kJ (' . n($a['kj'] ? $a['kj'] * 1.05 : 0) . ' kcal)', '<span class="inline-flex items-center justify-center size-6 rounded-md bg-orange-500/10 text-orange-600 dark:text-orange-400 shrink-0">' . $icoEnr . '</span>');
         ?>
       </div>
 
@@ -2991,36 +2999,43 @@ const IS_RUN_PAGE = <?= $isRun ? 'true' : 'false' ?>;
     (function () {
       const root = document.getElementById('actTabs');
       if (!root) return;
-      root.querySelectorAll('[role=tab]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const target = btn.getAttribute('aria-controls');
-          if (!target) return;
-          try { localStorage.setItem('trq_act_tab', btn.id.replace('act-tab-', '')); } catch (e) {}
-          requestAnimationFrame(() => {
-            const panel = document.getElementById(target);
-            if (!panel) return;
-            panel.querySelectorAll('canvas').forEach(cv => { const c = window.Chart && Chart.getChart(cv); if (c) { c.resize(); c.update('none'); } });
-            if (target === 'act-panel-telem' && window.trqMap) {
-              window.trqMap.invalidateSize();
-              if (window.trqMapFit && !window.trqMap._trqFit) { window.trqMap._trqFit = true; window.trqMapFit(); }
-            }
-            const h = location.hash ? document.querySelector(location.hash) : null;
-            if (h && h.closest('[role=tabpanel]') === panel) h.scrollIntoView({ block: 'start' });
-          });
+      const sync = target => {
+        root.querySelectorAll('[role=tabpanel]').forEach(p => {
+          const on = p.id === target;
+          p.toggleAttribute('hidden', !on);
+          p.setAttribute('aria-selected', on ? 'true' : 'false');
         });
-      });
-      const boot = () => {
-        let initBtn = null;
-        try {
-          const h = location.hash ? document.querySelector(location.hash) : null;
-          const hp = h ? h.closest('[role=tabpanel]') : null;
-          if (hp) initBtn = document.getElementById(hp.getAttribute('aria-labelledby'));
-          else initBtn = document.getElementById('act-tab-' + localStorage.getItem('trq_act_tab'));
-        } catch (e) {}
-        if (initBtn && initBtn.getAttribute('aria-selected') !== 'true') initBtn.click();
+        root.querySelectorAll('[role=tab]').forEach(t => {
+          const on = t.getAttribute('aria-controls') === target;
+          t.setAttribute('aria-selected', on ? 'true' : 'false');
+          t.setAttribute('tabindex', on ? '0' : '-1');
+        });
       };
-      if (document.readyState === 'loading') addEventListener('DOMContentLoaded', () => setTimeout(boot, 0));
-      else setTimeout(boot, 0);
+      const show = target => {
+        sync(target);
+        requestAnimationFrame(() => {
+          const panel = document.getElementById(target);
+          if (!panel) return;
+          panel.querySelectorAll('canvas').forEach(cv => { const c = window.Chart && Chart.getChart(cv); if (c) { c.resize(); c.update('none'); } });
+          if (target === 'act-panel-telem' && window.trqMap) {
+            window.trqMap.invalidateSize();
+            if (window.trqMapFit && !window.trqMap._trqFit) { window.trqMap._trqFit = true; window.trqMapFit(); }
+          }
+          const h = location.hash ? document.querySelector(location.hash) : null;
+          if (h && h.closest('[role=tabpanel]') === panel) h.scrollIntoView({ block: 'start' });
+        });
+      };
+      root.querySelectorAll('[role=tab]').forEach(btn => btn.addEventListener('click', () => {
+        const target = btn.getAttribute('aria-controls');
+        if (target) show(target);
+      }));
+      let initPanel = 'act-panel-synthese';
+      try {
+        const h = location.hash ? document.querySelector(location.hash) : null;
+        const hp = h ? h.closest('[role=tabpanel]') : null;
+        if (hp) initPanel = hp.id;
+      } catch (e) {}
+      show(initPanel);
     })();
     </script>
     <?php foot(); exit;
