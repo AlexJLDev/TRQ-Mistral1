@@ -1312,7 +1312,7 @@ function get_season_mmp(string $period, string $sport = 'ride'): array {
 /* ---------- Wellness Statistics & Corridor ---------- */
 function get_wellness_summary(int $days = 60): array {
     $pdo = db();
-    $rows = $pdo->query("SELECT * FROM wellness ORDER BY date DESC LIMIT $days")->fetchAll();
+    $rows = $pdo->query('SELECT * FROM wellness ORDER BY date DESC LIMIT ' . max(1, (int)$days))->fetchAll();
     if (!$rows) return [];
 
     $rows = array_reverse($rows);

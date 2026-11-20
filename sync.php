@@ -1,12 +1,19 @@
 <?php
 require_once __DIR__ . '/lib.php';
 bootstrap_errors(true);
+/* Sécurité : sync.php n'accepte que des POST — une action déclenchée en GET contournerait le contrôle CSRF (valable uniquement sur POST) et reste exécutable via une simple navigation cross-site. */
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+    http_response_code(405);
+    header('Content-Type: application/json');
+    echo json_encode(['ok' => false, 'error' => 'Méthode non autorisée (POST requis).']);
+    exit;
+}
 $me = require_login(true);                 // 401 JSON si non connecté ; jeton CSRF exigé (en-tête X-CSRF-Token)
 header('Content-Type: application/json');
 set_time_limit(180);
 
 try {
-    $action = $_POST['action'] ?? $_GET['action'] ?? '';
+    $action = $_POST['action'] ?? '';
     $pdo = db();
 
     if ($action === 'list') {
@@ -199,7 +206,9 @@ try {
 
     } elseif ($action === 'account_delete') {
         if (!auth_enabled()) throw new RuntimeException('Authentification désactivée.');
-        $u = auth_db()->query('SELECT * FROM users WHERE id=' . current_uid())->fetch();
+        $u = auth_db()->prepare('SELECT * FROM users WHERE id=?');
+        $u->execute([(int)current_uid()]);
+        $u = $u->fetch();
         if (!$u || !password_verify((string)($_POST['password'] ?? ''), $u['pass_hash'])) throw new RuntimeException('Mot de passe incorrect.');
         if ($u['role'] === 'admin' && (int)auth_db()->query("SELECT COUNT(*) FROM users WHERE role='admin' AND active=1")->fetchColumn() <= 1 && auth_user_count() > 1)
             throw new RuntimeException("Vous êtes le dernier administrateur : désignez-en un autre avant de supprimer ce compte.");
@@ -226,6 +235,13 @@ try {
         echo json_encode(['ok' => true, 'message' => 'Données de démo générées avec succès !']);
 
     } elseif ($action === 'clear_data') {
+        if (auth_enabled()) {
+            $st = auth_db()->prepare('SELECT pass_hash FROM users WHERE id=?');
+            $st->execute([(int)current_uid()]);
+            $hash = (string)$st->fetchColumn();
+            if ($hash === '' || !password_verify((string)($_POST['password'] ?? ''), $hash))
+                throw new RuntimeException('Mot de passe requis pour réinitialiser la base.');
+        }
         clear_database();
         echo json_encode(['ok' => true, 'message' => 'Base réinitialisée']);
 

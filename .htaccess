@@ -1,0 +1,20 @@
+# TRQ - protections deploiement Apache (a ajuster selon l'hebergeur)
+
+Options -Indexes
+
+# Donnees locales (bases SQLite, logs, sessions) : jamais accessibles en HTTP
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteRule ^data(/|$) - [F,L]
+</IfModule>
+
+# Fichiers sensibles ou auxiliaires
+<FilesMatch "^(config\.local\.php|composer\.(json|lock)|\.gitignore|.*\.(log|sqlite|sqlite-wal|sqlite-shm|bak))$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>

@@ -1260,7 +1260,8 @@ if ($p === 'activity') {
     $lapLabelN = count($laps) . ' ' . ($lapSource === 'manual' && count($laps) === 1 ? 'tour personnalisé' : $lapLabel);
 
     $seasonBestMmp = [];
-    $sBestQuery = $pdo->query("SELECT mmp FROM activities WHERE sport='{$a['sport']}' AND mmp IS NOT NULL AND date >= date('now','-90 days')");
+    $sBestQuery = $pdo->prepare("SELECT mmp FROM activities WHERE sport = ? AND mmp IS NOT NULL AND date >= date('now','-90 days')");
+    $sBestQuery->execute([$a['sport']]);
     foreach ($sBestQuery as $r) {
         foreach (json_decode($r['mmp'], true) ?: [] as $d => $v) {
             $seasonBestMmp[(int)$d] = max($seasonBestMmp[(int)$d] ?? 0, (float)$v);
@@ -4565,6 +4566,8 @@ if ($p === 'settings') {
         <p class="text-sm text-muted-foreground">Configurez vos seuils d'entraînement et la synchronisation avec intervals.icu</p>
       </div>
 
+      <?php if (isset($_GET['purged'])): ?><div class="alert" data-variant="destructive"><h2>Base réinitialisée : toutes les données locales ont été supprimées.</h2></div><?php endif; ?>
+
       <div class="card p-6 space-y-3">
         <header>
           <h3 class="text-base font-semibold">Apparence</h3>
@@ -4730,11 +4733,47 @@ if ($p === 'settings') {
           <button class="btn" onclick="call('seed_demo').then(()=>location.href='?p=dashboard')">
             ✨ Générer jeu de démo complet
           </button>
-          <button class="btn" data-variant="destructive" onclick="if(confirm('Supprimer toutes les activités et données ?')) call('clear_data').then(()=>location.reload())">
+          <button class="btn" data-variant="destructive" onclick="document.getElementById('modal-purge').showModal()">
             🗑️ Réinitialiser la base
           </button>
         </div>
       </div>
+
+      <dialog class="dialog" id="modal-purge"
+              onpointerdown="this.dataset.backdropPress = event.target === this"
+              onclick="if (event.target === this && this.dataset.backdropPress === 'true') this.close()">
+        <div class="sm:max-w-sm w-full">
+          <header class="flex items-center justify-between pb-3 border-b mb-4">
+            <div>
+              <h3 class="text-base font-semibold">Réinitialiser la base</h3>
+              <p class="text-xs text-muted-foreground">Supprime définitivement vos activités, données bien-être et séances planifiées.</p>
+            </div>
+            <button type="button" class="btn" data-variant="ghost" data-size="icon" onclick="this.closest('dialog').close()">✕</button>
+          </header>
+          <section class="space-y-3">
+            <div class="field">
+              <label class="text-xs font-medium" for="purgePwd">Mot de passe de confirmation</label>
+              <input type="password" id="purgePwd" class="w-full" autocomplete="current-password"
+                     onkeydown="if (event.key === 'Enter') { event.preventDefault(); purgeConfirm(); }">
+            </div>
+          </section>
+          <footer class="flex items-center justify-end gap-2 pt-3 border-t mt-4">
+            <button type="button" class="btn" data-variant="ghost" data-size="sm" onclick="this.closest('dialog').close()">Annuler</button>
+            <button type="button" class="btn" data-variant="destructive" data-size="sm" onclick="purgeConfirm()">Tout supprimer</button>
+          </footer>
+        </div>
+      </dialog>
+      <script>
+      async function purgeConfirm() {
+        const inp = document.getElementById('purgePwd');
+        if (!inp.value) { inp.focus(); return; }
+        try {
+          await call('clear_data', {password: inp.value});
+          location.href = '?p=settings&purged=1';
+        } catch (e) { alert(e.message); }
+        inp.value = '';
+      }
+      </script>
     </div>
     <?php ?>
     <script>
