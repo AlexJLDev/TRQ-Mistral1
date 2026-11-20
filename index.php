@@ -116,6 +116,36 @@ function alert_sev(string $sev): array {
     return ['box' => $box, 'dot' => '<span class="inline-block h-2 w-2 rounded-full ' . $dot . '"></span>'];
 }
 
+function render_goals_grid(array $gs): void {
+    $gbar = function (float $cur, float $goal, string $color): string {
+        $pct = $goal > 0 ? min(100, round($cur / $goal * 100)) : 0;
+        return '<div class="h-1.5 w-full rounded-full bg-muted overflow-hidden"><div class="h-full rounded-full ' . $color . '" style="width:' . $pct . '%"></div></div>';
+    };
+    $gcol = ['ride' => 'bg-sky-500', 'run' => 'bg-emerald-500', 'other' => 'bg-purple-500'];
+    foreach ($gs['sports'] as $sp => $s) {
+        $ico = $sp === 'ride' ? '🚴' : ($sp === 'run' ? '🏃' : '⚡');
+        echo '<div class="rounded-lg border p-3 space-y-1.5 min-w-0">';
+        echo '<p class="text-sm font-medium">' . $ico . ' ' . h($s['label']) . '</p>';
+        if ($s['goal_tss'] > 0) {
+            echo '<p class="text-xs text-muted-foreground tabular-nums">TSS : <span class="font-medium text-foreground">' . n($s['tss']) . '</span> / ' . n($s['goal_tss']) . '</p>';
+            echo $gbar($s['tss'], $s['goal_tss'], $gcol[$sp]);
+        }
+        if ($s['goal_time'] > 0) {
+            echo '<p class="text-xs text-muted-foreground tabular-nums">Temps : <span class="font-medium text-foreground">' . fmt_dur($s['time']) . '</span> / ' . n($s['goal_time'] / 3600, 1) . ' h</p>';
+            echo $gbar($s['time'], $s['goal_time'], $gcol[$sp]);
+        }
+        if ($s['goal_tss'] <= 0 && $s['goal_time'] <= 0) echo '<p class="text-xs text-muted-foreground">Pas d\'objectif pour ce sport</p>';
+        echo '</div>';
+    }
+    echo '<div class="rounded-lg border p-3 space-y-1.5 bg-muted/30 min-w-0">';
+    echo '<p class="text-sm font-medium">📊 Total</p>';
+    echo '<p class="text-xs text-muted-foreground tabular-nums">TSS : <span class="font-medium text-foreground">' . n($gs['total_tss']) . '</span> / ' . n($gs['goal_tss']) . '</p>';
+    echo $gbar($gs['total_tss'], $gs['goal_tss'], 'bg-emerald-500');
+    echo '<p class="text-xs text-muted-foreground tabular-nums">Temps : <span class="font-medium text-foreground">' . fmt_dur($gs['total_time']) . '</span> / ' . n($gs['goal_time'] / 3600, 1) . ' h</p>';
+    echo $gbar($gs['total_time'], $gs['goal_time'], 'bg-emerald-500');
+    echo '</div>';
+}
+
 function readiness_badge(?float $score): string {
     if ($score === null) return '<span class="badge" data-variant="outline">Non renseigné</span>';
     if ($score >= 80) return '<span class="badge bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">Optimal (' . round($score) . ')</span>';
@@ -669,6 +699,22 @@ if ($p === 'dashboard') {
       ?>
     </div>
 
+    <?php $gs = progress_goal_status(); ?>
+    <?php if ($gs['goals_set']): ?>
+    <div class="card" id="goalsCard">
+      <header class="p-4 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div>
+          <h3 class="text-base font-semibold">Objectifs de la semaine</h3>
+          <p class="text-xs text-muted-foreground">Réalisation depuis lundi — cibles modifiables dans <a class="hover:underline" href="?p=progress">Progression</a></p>
+        </div>
+        <span class="badge bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"><?= n($gs['total_tss']) ?> / <?= n($gs['goal_tss']) ?> TSS</span>
+      </header>
+      <section class="p-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+        <?php render_goals_grid($gs); ?>
+      </section>
+    </div>
+    <?php endif; ?>
+
     <!-- PMC Chart -->
     <div class="card" id="pmcCard">
       <header class="p-4 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -713,6 +759,45 @@ if ($p === 'dashboard') {
       </section>
     </div>
     <?php endif; ?>
+
+    <?php $heat = progress_heatmap(); $heatLvl = function (float $tss): string {
+        if ($tss <= 0) return 'bg-muted';
+        if ($tss < 100) return 'bg-emerald-500/25';
+        if ($tss < 200) return 'bg-emerald-500/45';
+        if ($tss < 350) return 'bg-emerald-500/70';
+        return 'bg-emerald-500';
+    }; ?>
+    <div class="card" id="heatCard">
+      <header class="p-4 border-b">
+        <h3 class="text-base font-semibold">Assiduité — 12 derniers mois</h3>
+        <p class="text-xs text-muted-foreground">Une case par jour, intensité selon le TSS (tous sports) · série en cours : <?= (int)$heat['streak'] ?> jour(s) · record : <?= (int)$heat['longest'] ?> jours</p>
+      </header>
+      <section class="p-4 space-y-3">
+        <div class="overflow-x-auto pb-1">
+          <div class="flex gap-[3px] w-max mx-auto sm:mx-0">
+            <?php foreach (array_chunk($heat['cells'], 7, true) as $chunk): ?>
+              <div class="flex flex-col gap-[3px]">
+                <?php foreach ($chunk as $k => $c): ?>
+                  <span class="inline-block h-3 w-3 rounded-[3px] <?= $heatLvl($c['tss']) ?>" title="<?= h(date('d/m', strtotime($k)) . ' — ' . ($c['n'] ? $c['n'] . ' séance(s), ' . round($c['tss']) . ' TSS' : 'repos')) ?>"></span>
+                <?php endforeach; ?>
+              </div>
+            <?php endforeach; ?>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">
+          <span><?= n($heat['sessions']) ?> séances</span>
+          <span><?= n($heat['active_days']) ?> jours actifs</span>
+          <span><?= n($heat['tss']) ?> TSS cumulés</span>
+          <span class="inline-flex items-center gap-1.5 ml-auto">Moins
+            <span class="inline-block h-3 w-3 rounded-[3px] bg-muted"></span>
+            <span class="inline-block h-3 w-3 rounded-[3px] bg-emerald-500/25"></span>
+            <span class="inline-block h-3 w-3 rounded-[3px] bg-emerald-500/45"></span>
+            <span class="inline-block h-3 w-3 rounded-[3px] bg-emerald-500/70"></span>
+            <span class="inline-block h-3 w-3 rounded-[3px] bg-emerald-500"></span>
+          Plus</span>
+        </div>
+      </section>
+    </div>
 
     <div class="grid lg:grid-cols-2 gap-6">
       <div class="card">
@@ -4226,6 +4311,7 @@ if ($p === 'progress') {
     };
     $dfmt = fn(?string $d): string => $d ? date('d/m/y', strtotime($d)) : '–';
     $feelLb = ['top' => 'Au top 💪', 'bien' => 'Bien 🙂', 'normal' => 'Normal 😐', 'dur' => 'Dur 😕', 'epuise' => 'Épuisé 🥵'];
+    $gs = progress_goal_status();
     ?>
     <div class="space-y-6">
       <div>
@@ -4249,6 +4335,39 @@ if ($p === 'progress') {
             stat_card('RPE moyen', $rpeAvg !== null ? n($rpeAvg, 1) : '–', 'sur ' . $curW['rpe_n'] . ' séance(s) notée(s)');
             ?>
           </div>
+
+          <!-- Objectifs de la semaine -->
+          <div class="flex items-center justify-between gap-2">
+            <h4 class="text-sm font-semibold">Objectifs de la semaine</h4>
+            <a href="#" onclick="goalsToggle(); return false;" class="text-xs text-muted-foreground hover:underline"><?= $gs['goals_set'] ? 'Modifier' : 'Définir' ?> les objectifs</a>
+          </div>
+          <div id="goalsForm" class="hidden card p-4 border bg-muted/20">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <?php foreach (PROGRESS_GOAL_SPORTS as $sp => $lb): ?>
+                <div class="space-y-2">
+                  <p class="text-sm font-medium"><?= h($lb) ?></p>
+                  <label class="text-xs text-muted-foreground flex items-center justify-between gap-2">TSS / semaine
+                    <input id="g-tss-<?= $sp ?>" type="number" min="0" max="3000" step="10" value="<?= (int)$gs['sports'][$sp]['goal_tss'] ?>" class="input h-8 w-24 text-sm">
+                  </label>
+                  <label class="text-xs text-muted-foreground flex items-center justify-between gap-2">Heures / semaine
+                    <input id="g-time-<?= $sp ?>" type="number" min="0" max="28" step="0.5" value="<?= $gs['sports'][$sp]['goal_time'] > 0 ? round($gs['sports'][$sp]['goal_time'] / 3600, 1) : '0' ?>" class="input h-8 w-24 text-sm">
+                  </label>
+                </div>
+              <?php endforeach; ?>
+            </div>
+            <div class="mt-4 flex items-center gap-2">
+              <button type="button" class="btn" data-size="sm" onclick="goalsSave()">Enregistrer</button>
+              <button type="button" class="btn" data-size="sm" data-variant="ghost" onclick="goalsToggle()">Annuler</button>
+            </div>
+          </div>
+          <?php if ($gs['goals_set']): ?>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <?php render_goals_grid($gs); ?>
+            </div>
+          <?php else: ?>
+            <p class="text-xs text-muted-foreground">Aucun objectif défini — clique sur « Définir les objectifs » pour fixer tes cibles TSS et heures par sport. Les jauges apparaîtront ici et sur le tableau de bord.</p>
+          <?php endif; ?>
+
           <div class="table-container">
             <table class="table text-sm">
               <thead>
@@ -4407,6 +4526,27 @@ if ($p === 'progress') {
         }
       });
     })();
+    </script>
+    <script>
+    function goalsToggle() {
+      document.getElementById('goalsForm').classList.toggle('hidden');
+    }
+
+    async function goalsSave() {
+      try {
+        const goals = {};
+        for (const sp of ['ride', 'run', 'other']) {
+          goals[sp] = {
+            tss: Math.max(0, parseInt(document.getElementById('g-tss-' + sp).value || '0', 10) || 0),
+            time: Math.round(Math.max(0, parseFloat((document.getElementById('g-time-' + sp).value || '0').replace(',', '.')) || 0) * 3600)
+          };
+        }
+        await call('week_goals_set', { goals: JSON.stringify(goals) });
+        location.reload();
+      } catch (e) {
+        alert(e.message);
+      }
+    }
     </script>
     <?php foot(); exit;
 }

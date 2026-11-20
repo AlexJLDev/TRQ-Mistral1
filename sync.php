@@ -135,6 +135,20 @@ try {
         db()->prepare('UPDATE activities SET rpe=?, feel=? WHERE id=?')->execute([$frpe, $ffeel !== '' ? $ffeel : null, $fid]);
         echo json_encode(['ok' => true]);
 
+    } elseif ($action === 'week_goals_set') {
+        $dec = json_decode((string)($_POST['goals'] ?? ''), true);
+        if (!is_array($dec)) throw new RuntimeException('Objectifs invalides.');
+        $out = [];
+        foreach (['ride', 'run', 'other'] as $sp) {
+            $g = is_array($dec[$sp] ?? null) ? $dec[$sp] : [];
+            $out[$sp] = [
+                'tss' => max(0, min(3000, (int)round((float)($g['tss'] ?? 0)))),
+                'time' => max(0, min(100800, (int)round((float)($g['time'] ?? 0)))),
+            ];
+        }
+        cfg_set('week_goals', json_encode($out));
+        echo json_encode(['ok' => true, 'goals' => $out]);
+
     } elseif ($action === 'lap_delete') {
         $laps = custom_lap_delete((string)$_POST['id'], (int)$_POST['lap']);
         echo json_encode(['ok' => true, 'count' => count($laps)]);

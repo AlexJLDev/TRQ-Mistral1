@@ -218,3 +218,85 @@ function progress_alerts(): array {
     usort($alerts, fn($a, $b) => ($order[$a['sev']] <=> $order[$b['sev']]));
     return $alerts;
 }
+/* ---------- Objectifs hebdomadaires ---------- */
+
+const PROGRESS_GOAL_SPORTS = ['ride' => 'Vélo', 'run' => 'Course', 'other' => 'Autre'];
+
+/** Objectifs hebdo (settings week_goals) normalisés : tss (0-3000) et time en secondes (0-28 h) par sport. */
+function progress_week_goals(?array $raw = null): array {
+    $raw = $raw ?? json_decode((string)cfg('week_goals', ''), true);
+    $out = [];
+    foreach (PROGRESS_GOAL_SPORTS as $sp => $lb) {
+        $g = is_array($raw[$sp] ?? null) ? $raw[$sp] : [];
+        $out[$sp] = [
+            'tss' => max(0, min(3000, (int)round((float)($g['tss'] ?? 0)))),
+            'time' => max(0, min(100800, (int)round((float)($g['time'] ?? 0)))),
+        ];
+    }
+    return $out;
+}
+
+/** Réalisation de la semaine en cours vs objectifs (jauges dashboard / rapport hebdo). */
+function progress_goal_status(?array $goals = null): array {
+    $goals = $goals ?? progress_week_goals();
+    $mon = array_key_first(progress_weeks(1));
+    $st = db()->prepare("SELECT sport, SUM(COALESCE(tss,0)) t, SUM(duration) dur FROM activities WHERE substr(date,1,10) >= ? GROUP BY sport");
+    $st->execute([$mon]);
+    $tssBy = ['ride' => 0.0, 'run' => 0.0, 'other' => 0.0];
+    $timeBy = ['ride' => 0, 'run' => 0, 'other' => 0];
+    foreach ($st->fetchAll() as $r) {
+        $sp = ($r['sport'] === 'ride' || $r['sport'] === 'run') ? $r['sport'] : 'other';
+        $tssBy[$sp] += (float)$r['t'];
+        $timeBy[$sp] += (int)$r['dur'];
+    }
+    $sports = [];
+    $goalTss = 0;
+    $goalTime = 0;
+    foreach (PROGRESS_GOAL_SPORTS as $sp => $lb) {
+        $sports[$sp] = ['label' => $lb, 'tss' => round($tssBy[$sp]), 'goal_tss' => $goals[$sp]['tss'], 'time' => $timeBy[$sp], 'goal_time' => $goals[$sp]['time']];
+        $goalTss += $goals[$sp]['tss'];
+        $goalTime += $goals[$sp]['time'];
+    }
+    return ['week_monday' => $mon, 'sports' => $sports, 'total_tss' => round(array_sum($tssBy)), 'goal_tss' => $goalTss,
+            'total_time' => array_sum($timeBy), 'goal_time' => $goalTime, 'goals_set' => $goalTss > 0 || $goalTime > 0];
+}
+
+/* ---------- Heatmap annuelle d'assiduité ---------- */
+
+/** Grille type contributions GitHub : une case par jour (lumière = TSS du jour) + séries de jours actifs. */
+function progress_heatmap(int $days = 364): array {
+    $pdo = db();
+    $end = new DateTime('today');
+    $start = (clone $end)->modify('-' . ($days - 1) . ' days');
+    $start->modify('monday this week');
+    $from = $start->format('Y-m-d');
+    $to = $end->format('Y-m-d');
+
+    $st = $pdo->prepare("SELECT substr(date,1,10) d, COUNT(*) nb, SUM(COALESCE(tss,0)) t, SUM(duration) dur FROM activities WHERE substr(date,1,10) BETWEEN ? AND ? GROUP BY d");
+    $st->execute([$from, $to]);
+    $byDay = [];
+    foreach ($st->fetchAll() as $r) $byDay[$r['d']] = ['n' => (int)$r['nb'], 'tss' => (float)$r['t'], 'time' => (int)$r['dur']];
+
+    $cells = [];
+    $activeDays = 0;
+    $sessions = 0;
+    $totalTss = 0.0;
+    $cur = 0; $max = 0; $curFrom = null; $maxFrom = null; $maxTo = null;
+    for ($d = clone $start; $d <= $end; $d->modify('+1 day')) {
+        $k = $d->format('Y-m-d');
+        $c = $byDay[$k] ?? ['n' => 0, 'tss' => 0.0, 'time' => 0];
+        $cells[$k] = $c;
+        if ($c['n'] > 0) {
+            $activeDays++;
+            $sessions += $c['n'];
+            $totalTss += $c['tss'];
+            if ($cur === 0) $curFrom = $k;
+            $cur++;
+            if ($cur > $max) { $max = $cur; $maxFrom = $curFrom; $maxTo = $k; }
+        } else {
+            $cur = 0;
+        }
+    }
+    return ['start' => $from, 'end' => $to, 'cells' => $cells, 'active_days' => $activeDays, 'sessions' => $sessions,
+            'tss' => round($totalTss), 'streak' => $cur, 'longest' => $max, 'longest_from' => $maxFrom, 'longest_to' => $maxTo];
+}
