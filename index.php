@@ -3401,7 +3401,7 @@ if ($p === 'calendar') {
     $lvlChip = fn(?array $sm) => $sm ? ['good' => 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', 'warn' => 'bg-amber-500/15 text-amber-700 dark:text-amber-300', 'bad' => 'bg-red-500/15 text-red-700 dark:text-red-300', 'info' => 'bg-muted text-muted-foreground'][$sm['level']] ?? 'bg-muted text-muted-foreground' : 'bg-muted text-muted-foreground';
     $chipBig = fn(string $base) => $base . ($view === 'week' ? ' text-sm gap-1.5' : ' text-xs gap-1');
 
-    $renderChip = function (array $a) use ($cmpByAct, $chipBig): string {
+    $renderChip = function (array $a) use ($cmpByAct, $chipBig, $lvlChip): string {
         $color = match ($a['sport']) {
             'ride' => 'border-l-sky-500 bg-sky-500/10 hover:bg-sky-500/15 dark:text-sky-100 text-sky-950',
             'run' => 'border-l-emerald-500 bg-emerald-500/10 hover:bg-emerald-500/15 dark:text-emerald-100 text-emerald-950',
@@ -3431,7 +3431,7 @@ if ($p === 'calendar') {
         return $out . '</a>';
     };
 
-    $renderPlan = function (array $pl) use ($cmpByPlan, $chipBig): string {
+    $renderPlan = function (array $pl) use ($cmpByPlan, $chipBig, $lvlChip): string {
         $hasStruct = !empty($pl['profile']);
         $out = '<div class="group/pl relative p-2 rounded-lg border border-dashed border-muted-foreground/40 bg-muted/20 ' . ($view === 'week' ? 'text-sm' : 'text-xs') . ' leading-tight">';
         if (!empty($pl['icu_text']) && cfg('api_key')) {
