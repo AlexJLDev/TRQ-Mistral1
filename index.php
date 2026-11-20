@@ -3375,7 +3375,7 @@ if ($p === 'calendar') {
     }
 
     /* Rapprochement prévu / réalisé (liens manuels + appariement du jour), avec cache du score */
-    $cmpByPlan = []; $cmpByAct = []; $manualRows = []; $reserved = plan_reserved_ids();
+    $cmpByPlan = []; $cmpByAct = []; $cmpBudget = 10; $manualRows = []; $reserved = plan_reserved_ids();
     foreach ($pdo->query("SELECT activity_id FROM planned_workouts WHERE activity_id IS NOT NULL AND activity_id <> ''")->fetchAll(PDO::FETCH_COLUMN) as $mid) {
         $ms = $pdo->prepare('SELECT ' . ACT_COLS . ' FROM activities WHERE id=?'); $ms->execute([$mid]); if ($mr = $ms->fetch()) $manualRows[$mid] = $mr;
     }
@@ -3385,7 +3385,7 @@ if ($p === 'calendar') {
         foreach ($dd['planned'] as $plRow) {
             if (!isset($pairs[$plRow['id']])) continue;
             $pAct = $pairs[$plRow['id']];
-            $sum = plan_cmp_summary($plRow, $pAct, 10);
+            $sum = plan_cmp_summary($plRow, $pAct, $cmpBudget);
             $cmpByPlan[$plRow['id']] = ['act' => $pAct, 'sum' => $sum];
             if ($sum) $cmpByAct[$pAct['id']] = ['score' => $sum['score'], 'level' => $sum['level']];
         }
