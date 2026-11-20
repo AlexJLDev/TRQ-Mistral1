@@ -107,6 +107,15 @@ function sport_badge(string $sport, string $type = ''): string {
     };
 }
 
+function alert_sev(string $sev): array {
+    [$box, $dot] = match($sev) {
+        'bad' => ['border-red-500/30 bg-red-500/5', 'bg-red-500'],
+        'warn' => ['border-amber-500/30 bg-amber-500/5', 'bg-amber-500'],
+        default => ['border-sky-500/30 bg-sky-500/5', 'bg-sky-500'],
+    };
+    return ['box' => $box, 'dot' => '<span class="inline-block h-2 w-2 rounded-full ' . $dot . '"></span>'];
+}
+
 function readiness_badge(?float $score): string {
     if ($score === null) return '<span class="badge" data-variant="outline">Non renseigné</span>';
     if ($score >= 80) return '<span class="badge bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">Optimal (' . round($score) . ')</span>';
@@ -125,6 +134,7 @@ function head(string $title, string $active): void {
         'admin' => ['Administration', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'],
         'wellness' => ['Wellness & Santé', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>'],
         'nutrition' => ['Nutrition', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>'],
+        'progress' => ['Progression', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>'],
         'zones' => ['Zones', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'],
         'settings' => ['Paramètres', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'],
     ];
@@ -234,7 +244,7 @@ tr.lap-flash { animation: lapflash 1.6s ease-out; }
 <?php
 $groups = [
     'Analyse'     => ['dashboard', 'activities', 'calendar'],
-    'Performance' => ['power', 'workouts', 'zones'],
+    'Performance' => ['power', 'workouts', 'zones', 'progress'],
     'Santé'       => ['wellness', 'nutrition'],
     'Compte'      => array_merge(['settings'], (auth_enabled() && is_admin()) ? ['admin'] : []),
 ];
@@ -683,6 +693,26 @@ if ($p === 'dashboard') {
         <div class="mt-3 h-44 w-full border-t pt-3"><canvas id="tsb"></canvas></div>
       </section>
     </div>
+
+    <?php $dashAlerts = progress_alerts(); if ($dashAlerts): ?>
+    <div class="card" id="alertsCard">
+      <header class="p-4 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div>
+          <h3 class="text-base font-semibold">Alertes &amp; signaux de surmenage</h3>
+          <p class="text-xs text-muted-foreground">Charge, fraîcheur, ressenti et restitution — détails et réglages dans <a class="hover:underline" href="?p=progress">Progression</a></p>
+        </div>
+        <a href="?p=progress" class="btn" data-size="sm" data-variant="outline">Voir ma progression</a>
+      </header>
+      <section class="p-4 grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
+        <?php foreach ($dashAlerts as $al): $sev = alert_sev($al['sev']); ?>
+          <div class="rounded-lg border p-3 <?= $sev['box'] ?>">
+            <div class="flex items-center gap-2 text-sm font-medium mb-1"><?= $sev['dot'] ?><?= h($al['title']) ?></div>
+            <p class="text-xs text-muted-foreground"><?= h($al['msg']) ?></p>
+          </div>
+        <?php endforeach; ?>
+      </section>
+    </div>
+    <?php endif; ?>
 
     <div class="grid lg:grid-cols-2 gap-6">
       <div class="card">
@@ -4172,6 +4202,206 @@ if ($p === 'zones') {
         </div>
       </div>
     </div>
+    <?php foot(); exit;
+}
+
+/* ========================================================
+   PROGRESSION (RAPPORT HEBDO / EFFICIENCE / RECORDS)
+   ======================================================== */
+if ($p === 'progress') {
+    head('Progression', 'progress');
+    if (!$count) { empty_state(); foot(); exit; }
+
+    $wks = array_values(progress_weeks(10));
+    $curW = end($wks);
+    $prevW = count($wks) > 1 ? $wks[count($wks) - 2] : null;
+    $eff = progress_efficiency();
+    $prs = progress_prs();
+    $alerts = progress_alerts();
+    $rpeAvg = $curW['rpe_n'] ? round($curW['rpe_sum'] / $curW['rpe_n'], 1) : null;
+    $dsub = function (float $cur, ?float $prev, int $dec = 0, string $unit = ''): string {
+        if ($prev === null) return 'pas de semaine précédente';
+        $d = $cur - $prev;
+        return sprintf('%s%s%s vs semaine précédente', $d > 0 ? '+' : ($d < 0 ? '−' : '='), n(abs($d), $dec), $unit);
+    };
+    $dfmt = fn(?string $d): string => $d ? date('d/m/y', strtotime($d)) : '–';
+    $feelLb = ['top' => 'Au top 💪', 'bien' => 'Bien 🙂', 'normal' => 'Normal 😐', 'dur' => 'Dur 😕', 'epuise' => 'Épuisé 🥵'];
+    ?>
+    <div class="space-y-6">
+      <div>
+        <h1 class="text-2xl font-bold tracking-tight">Progression</h1>
+        <p class="text-sm text-muted-foreground">Rapport hebdomadaire, efficience (TSS/RPE), records personnels et signaux de surmenage</p>
+      </div>
+
+      <!-- Rapport de la semaine -->
+      <div class="card" id="weekCard">
+        <header class="p-4 border-b">
+          <h3 class="text-base font-semibold">Rapport de la semaine</h3>
+          <p class="text-xs text-muted-foreground">Semaine en cours (du <?= date('d/m', strtotime($curW['monday'])) ?> au <?= date('d/m') ?>), comparée à la précédente</p>
+        </header>
+        <section class="p-4 space-y-4">
+          <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+            <?php
+            stat_card('Séances', (string)$curW['sessions'], $dsub($curW['sessions'], $prevW ? $prevW['sessions'] : null));
+            stat_card('Temps', fmt_dur($curW['time']), $dsub($curW['time'], $prevW ? $prevW['time'] : null));
+            stat_card('Distance', n($curW['km'], 1) . ' km', $dsub($curW['km'], $prevW ? $prevW['km'] : null, 1, ' km'));
+            stat_card('Charge', n($curW['tss']) . ' TSS', $dsub($curW['tss'], $prevW ? $prevW['tss'] : null, 0, ' TSS'));
+            stat_card('RPE moyen', $rpeAvg !== null ? n($rpeAvg, 1) : '–', 'sur ' . $curW['rpe_n'] . ' séance(s) notée(s)');
+            ?>
+          </div>
+          <div class="table-container">
+            <table class="table text-sm">
+              <thead>
+                <tr>
+                  <th>Semaine</th>
+                  <th>Séances</th>
+                  <th>Temps</th>
+                  <th>dont vélo</th>
+                  <th>dont course</th>
+                  <th>Charge</th>
+                  <th>RPE moyen</th>
+                  <th>Ressentis</th>
+                </tr>
+              </thead>
+              <tbody>
+                <?php foreach ($wks as $w): ?>
+                  <tr class="<?= $w === $curW ? 'bg-muted/40 font-semibold' : '' ?>">
+                    <td>Sem. <?= date('W', strtotime($w['monday'])) ?> <span class="text-muted-foreground font-normal">(du <?= date('d/m', strtotime($w['monday'])) ?>)</span></td>
+                    <td><?= $w['sessions'] ?></td>
+                    <td><?= fmt_dur($w['time']) ?></td>
+                    <td><?= n($w['km_sport']['ride']) ?> km</td>
+                    <td><?= n($w['km_sport']['run']) ?> km</td>
+                    <td><?= n($w['tss']) ?></td>
+                    <td><?= $w['rpe_n'] ? n($w['rpe_sum'] / $w['rpe_n'], 1) : '–' ?></td>
+                    <td class="text-xs">
+                      <?php if ($w['feel']): foreach ($w['feel'] as $fk => $fnb): ?>
+                        <span class="whitespace-nowrap mr-2"><?= (int)$fnb ?> × <?= $feelLb[$fk] ?? h($fk) ?></span>
+                      <?php endforeach; else: ?><span class="text-muted-foreground">–</span><?php endif; ?>
+                    </td>
+                  </tr>
+                <?php endforeach; ?>
+              </tbody>
+            </table>
+          </div>
+          <p class="text-xs text-muted-foreground">Le RPE moyen et les ressentis se remplissent depuis le badge en haut de chaque séance — plus de séances notées, plus le rapport est précis.</p>
+        </section>
+      </div>
+
+      <!-- Efficience TSS/RPE -->
+      <div class="card" id="effCard">
+        <header class="p-4 border-b">
+          <h3 class="text-base font-semibold">Efficience — ratio TSS / RPE</h3>
+          <p class="text-xs text-muted-foreground">Charge physique produite par unité d'effort perçu : une hausse régulière signifie que tu encaisses plus de charge pour une sensation identique (~90 jours)</p>
+        </header>
+        <section class="p-4">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+            <?php
+            stat_card('30 derniers jours', $eff['avg30'] !== null ? n($eff['avg30'], 1) : '–', 'TSS/RPE moyen');
+            stat_card('30 j précédents', $eff['avgPrev'] !== null ? n($eff['avgPrev'], 1) : '–', 'comparaison');
+            stat_card('Tendance', $eff['delta'] !== null ? sprintf('%+.1f', $eff['delta']) : '–', $eff['delta'] !== null ? ($eff['delta'] > 0 ? 'en progression 🙂' : ($eff['delta'] < 0 ? 'en baisse — surveille' : 'stable')) : 'pas assez de données');
+            stat_card('Séances notées', (string)count($eff['vals']), 'avec TSS et RPE renseignés (90 j)');
+            ?>
+          </div>
+          <?php if ($eff['vals']): ?>
+            <div class="h-64 w-full"><canvas id="effChart"></canvas></div>
+          <?php else: ?>
+            <p class="text-sm text-muted-foreground">Renseigne le RPE de quelques séances pour construire la courbe.</p>
+          <?php endif; ?>
+        </section>
+      </div>
+
+      <!-- Records personnels -->
+      <div class="grid lg:grid-cols-2 gap-6" id="prCard">
+        <?php foreach ([['key' => 'pw', 'title' => 'Puissance (vélo)', 'lab' => PR_POWER_LABELS, 'unit' => ' W'], ['key' => 'hr', 'title' => 'Fréquence cardiaque', 'lab' => PR_HR_LABELS, 'unit' => ' bpm']] as $grp): $store = $prs[$grp['key']] ?? []; ?>
+        <div class="card">
+          <header class="p-4 border-b">
+            <h3 class="text-base font-semibold">Records — <?= $grp['title'] ?></h3>
+            <p class="text-xs text-muted-foreground">Meilleures moyennes glissantes détectées automatiquement dans les flux (1 Hz)</p>
+          </header>
+          <section class="p-0">
+            <div class="table-container border-0 rounded-none">
+              <table class="table text-sm">
+                <thead>
+                  <tr>
+                    <th>Durée</th>
+                    <th>Record</th>
+                    <th>Δ vs précédent</th>
+                    <th>Date</th>
+                    <th>Séance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <?php foreach ($grp['lab'] as $d => $lab): $rec = $store[$d] ?? null; $prevVal = ($rec && !empty($rec['hist'])) ? end($rec['hist'])['val'] : null; $dv = ($rec && $prevVal !== null) ? (float)$rec['val'] - $prevVal : null; ?>
+                  <tr>
+                    <td class="font-medium"><?= h($lab) ?></td>
+                    <td class="tabular-nums font-semibold"><?= $rec ? n($rec['val']) . $grp['unit'] : '–' ?></td>
+                    <td class="tabular-nums <?= $dv !== null && $dv > 0 ? 'text-emerald-600 dark:text-emerald-400' : '' ?>"><?= $dv !== null ? ($dv > 0 ? '+' . n($dv) : '0') . $grp['unit'] : '–' ?></td>
+                    <td><?= $rec ? $dfmt($rec['date'] ?? null) : '–' ?></td>
+                    <td class="max-w-[180px] truncate">
+                      <?php if ($rec && !empty($rec['act_id'])): ?>
+                        <a class="hover:underline" href="?p=activity&id=<?= h($rec['act_id']) ?>"><?= h($rec['name'] ?: 'Séance #' . $rec['act_id']) ?></a>
+                      <?php else: ?>–<?php endif; ?>
+                    </td>
+                  </tr>
+                  <?php endforeach; ?>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+        <?php endforeach; ?>
+      </div>
+
+      <!-- Alertes -->
+      <div class="card" id="progressAlerts">
+        <header class="p-4 border-b">
+          <h3 class="text-base font-semibold">Alertes &amp; signaux de surmenage</h3>
+          <p class="text-xs text-muted-foreground">Charge, fraîcheur (TSB), ressenti et restitution (HRV, FC repos) — indicateurs indicatifs, pas un diagnostic médical</p>
+        </header>
+        <section class="p-4 grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
+          <?php if (!$alerts): ?>
+            <p class="text-sm text-muted-foreground col-span-full">Aucun signal d'alerte — charge et récupération sont cohérentes. 👌</p>
+          <?php else: foreach ($alerts as $al): $sev = alert_sev($al['sev']); ?>
+            <div class="rounded-lg border p-3 <?= $sev['box'] ?>">
+              <div class="flex items-center gap-2 text-sm font-medium mb-1"><?= $sev['dot'] ?><?= h($al['title']) ?></div>
+              <p class="text-xs text-muted-foreground"><?= h($al['msg']) ?></p>
+            </div>
+          <?php endforeach; endif; ?>
+        </section>
+      </div>
+    </div>
+
+    <script>
+    (() => {
+      const eff = <?= json_encode($eff['vals']) ?>;
+      if (!eff.length) return;
+      const labels = eff.map(v => v.date.slice(8, 10) + '/' + v.date.slice(5, 7));
+      new Chart('effChart', {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'TSS / RPE',
+            data: eff.map(v => v.ratio),
+            borderColor: '#0284c7',
+            backgroundColor: 'rgba(2,132,199,.12)',
+            fill: true,
+            tension: .3,
+            pointRadius: 2,
+            borderWidth: 2
+          }]
+        },
+        options: {
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { title: { display: true, text: 'TSS par unité de RPE' } },
+            x: { ticks: { maxTicksLimit: 12 } }
+          }
+        }
+      });
+    })();
+    </script>
     <?php foot(); exit;
 }
 

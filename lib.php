@@ -3,6 +3,7 @@ require_once __DIR__ . '/auth_lib.php';
 require_once __DIR__ . '/diagnostic.php';
 require_once __DIR__ . '/plan_compare.php';
 require_once __DIR__ . '/nutrition_lib.php';
+require_once __DIR__ . '/progress_lib.php';
 
 const DB_FILE = __DIR__ . '/data/app.sqlite';
 const MMP_DURS = [1, 5, 10, 15, 30, 60, 120, 180, 300, 600, 1200, 1800, 3600, 5400, 7200];
