@@ -4640,7 +4640,8 @@ if ($p === 'settings') {
             </div>
             <div class="field">
               <label class="text-xs font-medium">ID Athlète (laissez 0 pour votre propre profil)</label>
-              <input class="input text-sm" type="text" name="athlete_id" value="<?= $f('athlete_id', '0') ?>">
+              <input class="input text-sm" type="text" name="athlete_id" value="<?= $f('athlete_id', '0') ?>" inputmode="numeric">
+              <p class="text-[11px] text-muted-foreground">Nombre seul, sans « i » ni espaces (ex : 27729 — depuis une URL intervals.icu/athlete/<b>i27729</b>, ne gardez que 27729).</p>
             </div>
           </div>
         </div>
