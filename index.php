@@ -1193,6 +1193,16 @@ if ($p === 'activity') {
 
 
       
+      <div class="tabs w-full" id="actTabs">
+        <nav role="tablist" aria-orientation="horizontal" class="w-full flex-wrap">
+          <button type="button" role="tab" id="act-tab-synthese" aria-controls="act-panel-synthese" aria-selected="true" tabindex="0">📋 Synthèse</button>
+          <button type="button" role="tab" id="act-tab-telem" aria-controls="act-panel-telem" aria-selected="false" tabindex="-1">📈 Télémétrie</button>
+          <?php if (!empty($laps)): ?><button type="button" role="tab" id="act-tab-intervalles" aria-controls="act-panel-intervalles" aria-selected="false" tabindex="-1">🔁 Intervalles</button><?php endif; ?>
+          <button type="button" role="tab" id="act-tab-analyses" aria-controls="act-panel-analyses" aria-selected="false" tabindex="-1">🔬 Analyses avancées</button>
+          <button type="button" role="tab" id="act-tab-distributions" aria-controls="act-panel-distributions" aria-selected="false" tabindex="-1">📊 Distributions</button>
+        </nav>
+        <div role="tabpanel" id="act-panel-synthese" aria-labelledby="act-tab-synthese" tabindex="-1" aria-selected="true" class="space-y-6">
+
       <!-- Nutrition (statement UCI 2026) -->
       <?php $nutPlan = nutrition_session_plan($a, nutrition_weight(), (float)$ftp); $nob = $nutPlan['onbike']; $nutPost = $nutPlan['post']; ?>
       <div class="card" id="nutritionCard">
@@ -1345,6 +1355,9 @@ if ($p === 'activity') {
       async function planLink(planId, actId) { try { await call('plan_link', {plan_id: planId, activity_id: actId}); location.reload(); } catch (e) { alert(e.message); } }
       async function planUnlink(planId) { try { await call('plan_unlink', {plan_id: planId}); location.reload(); } catch (e) { alert(e.message); } }
       </script>
+
+        </div>
+        <div role="tabpanel" id="act-panel-telem" aria-labelledby="act-tab-telem" tabindex="-1" class="space-y-6" hidden>
 
       <!-- Aperçu du parcours (carte) -->
       <?php if ($showMap): ?>
@@ -1575,6 +1588,10 @@ if ($p === 'activity') {
         </section>
       </div>
 
+        </div>
+        <?php if (!empty($laps)): ?>
+        <div role="tabpanel" id="act-panel-intervalles" aria-labelledby="act-tab-intervalles" tabindex="-1" class="space-y-6" hidden>
+
       <!-- Graphique par tour (laps appareil / intervals.icu, intervalles détectés, ou splits 1 km en course) -->
       <?php if (!empty($laps)): ?>
         <div class="card" id="lapCard">
@@ -1662,6 +1679,10 @@ if ($p === 'activity') {
           </section>
         </div>
       <?php endif; ?>
+
+        </div>
+        <?php endif; ?>
+        <div role="tabpanel" id="act-panel-analyses" aria-labelledby="act-tab-analyses" tabindex="-1" class="space-y-6" hidden>
 
       <!-- Grille Télémétrique Approfondie WKO5 (Protégée contre tout Undefined array key) -->
       <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1992,6 +2013,9 @@ if ($p === 'activity') {
       })();
       </script>
       <?php endif; ?>
+        </div>
+        <div role="tabpanel" id="act-panel-distributions" aria-labelledby="act-tab-distributions" tabindex="-1" class="space-y-6" hidden>
+
       <!-- Graphique PDC de la séance vs Meilleure PDC 90j de la saison -->
       <div class="grid lg:grid-cols-2 gap-6">
         <div class="card">
@@ -2133,6 +2157,8 @@ if ($p === 'activity') {
       </script>
       <?php endif; ?>
 
+        </div>
+      </div>
 
     </div>
 
@@ -2784,6 +2810,7 @@ if ($p === 'activity') {
     avail = ['track'].concat(['watts', 'hr', 'speed', 'alt'].filter(k => g[k] && g[k].some(x => x > 0)));
     cur = MAP_IS_RUN && avail.includes('speed') ? 'speed' : avail.includes('watts') ? 'watts' : avail.includes('speed') ? 'speed' : 'track';
     map = L.map(box, {scrollWheelZoom: false});
+    window.trqMap = map;
     setTiles(localStorage.mapTiles && TILES[localStorage.mapTiles] ? localStorage.mapTiles : 'osm');
     const sel = document.getElementById('mapTiles');
     sel.value = tileKey; sel.onchange = e => { localStorage.mapTiles = e.target.value; setTiles(e.target.value); };
@@ -2958,6 +2985,39 @@ const IS_RUN_PAGE = <?= $isRun ? 'true' : 'false' ?>;
         }
     });
     <?php endif; ?>
+    </script>
+    <script>
+    (function () {
+      const root = document.getElementById('actTabs');
+      if (!root) return;
+      root.querySelectorAll('[role=tab]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const target = btn.getAttribute('aria-controls');
+          if (!target) return;
+          try { localStorage.setItem('trq_act_tab', btn.id.replace('act-tab-', '')); } catch (e) {}
+          requestAnimationFrame(() => {
+            const panel = document.getElementById(target);
+            if (!panel) return;
+            panel.querySelectorAll('canvas').forEach(cv => { const c = window.Chart && Chart.getChart(cv); if (c) { c.resize(); c.update('none'); } });
+            if (target === 'act-panel-telem' && window.trqMap) window.trqMap.invalidateSize();
+            const h = location.hash ? document.querySelector(location.hash) : null;
+            if (h && h.closest('[role=tabpanel]') === panel) h.scrollIntoView({ block: 'start' });
+          });
+        });
+      });
+      const boot = () => {
+        let initBtn = null;
+        try {
+          const h = location.hash ? document.querySelector(location.hash) : null;
+          const hp = h ? h.closest('[role=tabpanel]') : null;
+          if (hp) initBtn = document.getElementById(hp.getAttribute('aria-labelledby'));
+          else initBtn = document.getElementById('act-tab-' + localStorage.getItem('trq_act_tab'));
+        } catch (e) {}
+        if (initBtn && initBtn.getAttribute('aria-selected') !== 'true') initBtn.click();
+      };
+      if (document.readyState === 'loading') addEventListener('DOMContentLoaded', () => setTimeout(boot, 0));
+      else setTimeout(boot, 0);
+    })();
     </script>
     <?php foot(); exit;
 }
