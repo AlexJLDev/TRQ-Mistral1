@@ -175,7 +175,8 @@ function cfg_set(string $k, string $v): void {
 function icu_curl(string $url, array $extra = []) {
     $key = cfg('api_key');
     if (!$key) throw new RuntimeException("Clé API intervals.icu manquante (Paramètres).");
-    $opts = [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 60, CURLOPT_USERPWD => 'API_KEY:' . $key] + $extra;
+    $opts = [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 60, CURLOPT_USERPWD => 'API_KEY:' . $key,
+             CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4] + $extra;
     if (cfg('ssl_verify', '1') === '0') {
         $opts[CURLOPT_SSL_VERIFYPEER] = false; $opts[CURLOPT_SSL_VERIFYHOST] = 0;
     } else {
@@ -197,6 +198,8 @@ function icu_error($ch, $resp, string $what): string {
             return "intervals.icu : certificat SSL non reconnu ($msg). Un antivirus ou un proxy qui inspecte le HTTPS en est la cause la plus probable. "
                  . "Solution : Paramètres → « Connexion sécurisée (SSL) » (bundle de certificats ou désactivation de la vérification). ($what)";
         if ($errno === 35) return "intervals.icu : échec de la connexion sécurisée ($msg). Vérifiez votre connexion Internet, un pare-feu ou un antivirus ; voir aussi Paramètres → « Connexion sécurisée (SSL) ». ($what)";
+        if ($errno === 6) return "intervals.icu : nom de domaine introuvable ($msg). Votre machine n'arrive pas à résoudre les noms DNS : vérifiez votre connexion Internet, le serveur DNS (essai possible avec 1.1.1.1/8.8.8.8), ou un VPN/proxy d'entreprise qui bloquerait intervals.icu. ($what)";
+        if ($errno === 7) return "intervals.icu : connexion refusée ($msg). Un pare-feu, un antivirus ou le réseau bloque la sortie HTTPS. ($what)";
         return "intervals.icu : $msg ($what)";
     }
     if ($code === 401 || $code === 403) return "intervals.icu : clé API refusée (HTTP $code). Vérifiez la clé et l'ID athlète dans Paramètres. ($what)";
@@ -227,7 +230,10 @@ function icu_send(string $method, string $path, array $body = [], array $params 
     return json_decode((string)$resp, true);
 }
 
-function athlete_id(): string { return cfg('athlete_id', '0'); }
+function athlete_id(): string {
+    /* Tolère les ID copiés depuis l'URL d'intervals.icu (ex : « i27729 ») : on ne garde que les chiffres. */
+    return preg_replace('/\D+/', '', (string)cfg('athlete_id', '0')) ?: '0';
+}
 
 function sport_of(string $type): string {
     if (in_array($type, RIDE_TYPES, true)) return 'ride';
