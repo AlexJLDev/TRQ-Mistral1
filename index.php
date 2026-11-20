@@ -3328,80 +3328,64 @@ if ($p === 'wellness') {
 if ($p === 'calendar') {
     head('Calendrier d’entraînement', 'calendar');
 
-    $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
-    $isMobileUa = (bool)preg_match('/Mobi|iPhone|Android|iPad/i', $ua);
-    $view = (($_GET['v'] ?? ($isMobileUa ? 'week' : 'month')) === 'week') ? 'week' : 'month';
+    $today = date('Y-m-d');
+    $mParam = $_GET['m'] ?? date('Y-m');
+    $firstDayOfMonth = new DateTime($mParam . '-01');
+    $yearMonth = $firstDayOfMonth->format('Y-m');
+    $prevM = (clone $firstDayOfMonth)->modify('-1 month')->format('Y-m');
+    $nextM = (clone $firstDayOfMonth)->modify('+1 month')->format('Y-m');
 
-    /* ---------- Plage de données selon la vue ---------- */
-    if ($view === 'week') {
-        $anchor = new DateTime($_GET['w'] ?? date('Y-m-d'));
-        $rangeStart = (clone $anchor)->modify('monday this week');
-        $rangeEnd = (clone $rangeStart)->modify('+6 days');
-        $prevLink = ['w' => (clone $rangeStart)->modify('-7 days')->format('Y-m-d')];
-        $nextLink = ['w' => (clone $rangeStart)->modify('+7 days')->format('Y-m-d')];
-        $periodLabel = $rangeStart->format('j') . ( $rangeStart->format('n') !== $rangeEnd->format('n') ? ' ' . $calMoisFr[(int)$rangeStart->format('n')] : '') . ' – ' . $rangeEnd->format('j') . ' ' . $calMoisFr[(int)$rangeEnd->format('n')] . ' ' . $rangeEnd->format('Y');
-        $periodWeekNum = $rangeStart->format('W');
-    } else {
-        $mParam = $_GET['m'] ?? date('Y-m');
-        $firstDayOfMonth = new DateTime($mParam . '-01');
-        $yearMonth = $firstDayOfMonth->format('Y-m');
-        $rangeStart = (clone $firstDayOfMonth);
-        if ((int)$rangeStart->format('N') > 1) $rangeStart->modify('-' . ((int)$rangeStart->format('N') - 1) . ' days');
-        $rangeEnd = (clone $firstDayOfMonth)->modify('last day of this month');
-        if ((int)$rangeEnd->format('N') < 7) $rangeEnd->modify('+' . (7 - (int)$rangeEnd->format('N')) . ' days');
-        $prevLink = ['m' => (clone $firstDayOfMonth)->modify('-1 month')->format('Y-m')];
-        $nextLink = ['m' => (clone $firstDayOfMonth)->modify('+1 month')->format('Y-m')];
-        $periodLabel = $calMoisFr[(int)$firstDayOfMonth->format('n')] . ' ' . $firstDayOfMonth->format('Y');
-        $periodWeekNum = (clone $firstDayOfMonth)->format('W');
-    }
+    $monthStart = clone $firstDayOfMonth;
+    if ((int)$monthStart->format('N') > 1) $monthStart->modify('-' . ((int)$monthStart->format('N') - 1) . ' days');
+    $monthEnd = (clone $firstDayOfMonth)->modify('last day of this month');
+    if ((int)$monthEnd->format('N') < 7) $monthEnd->modify('+' . (7 - (int)$monthEnd->format('N')) . ' days');
+
+    $weekStart = (new DateTime('today'))->modify('monday this week');
+    $weekEnd = (clone $weekStart)->modify('+6 days');
+    $prevW = (clone $weekStart)->modify('-7 days')->format('Y-m-d');
+    $nextW = (clone $weekStart)->modify('+7 days')->format('Y-m-d');
+
     $calMoisFr = [1 => 'janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
     $calJoursFr = [1 => 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
-    $qs = fn(array $extra) => '?p=calendar' . ($view === 'week' ? '&v=week' : '') . '&' . implode('&', array_map(fn($k, $v) => "$k=$v", array_keys($extra), $extra));
-    $today = date('Y-m-d');
-    $calendarSwitchMonth = $view === 'week' ? $anchor->format('Y-m') : str_replace('T00:00:00', '', $_GET['m'] ?? date('Y-m'));
-    $calendarSwitchDay = $view === 'week' ? $rangeStart->format('Y-m-d') : $today;
 
-    $actsSt = $pdo->prepare('SELECT ' . ACT_COLS . ' FROM activities WHERE date >= ? AND date <= ? ORDER BY date ASC');
-    $actsSt->execute([$rangeStart->format('Y-m-d') . 'T00:00:00', $rangeEnd->format('Y-m-d') . 'T23:59:59']);
-    $byDay = [];
-    foreach ($actsSt->fetchAll() as $r) {
-        $byDay[substr($r['date'], 0, 10)]['acts'][] = $r;
-    }
+    $loadRange = function (string $from, string $to) use ($pdo): array {
+        $byDay = [];
+        $st = $pdo->prepare('SELECT ' . ACT_COLS . ' FROM activities WHERE date >= ? AND date <= ? ORDER BY date ASC');
+        $st->execute([$from . 'T00:00:00', $to . 'T23:59:59']);
+        foreach ($st->fetchAll() as $r) $byDay[substr($r['date'], 0, 10)]['acts'][] = $r;
+        $st = $pdo->prepare('SELECT * FROM planned_workouts WHERE date >= ? AND date <= ?');
+        $st->execute([$from, $to]);
+        foreach ($st->fetchAll() as $r) $byDay[$r['date']]['planned'][] = $r;
+        $st = $pdo->prepare('SELECT * FROM wellness WHERE date >= ? AND date <= ?');
+        $st->execute([$from, $to]);
+        foreach ($st->fetchAll() as $r) $byDay[$r['date']]['well'] = $r;
+        return $byDay;
+    };
+    $byDayM = $loadRange($monthStart->format('Y-m-d'), $monthEnd->format('Y-m-d'));
+    $byDayW = $loadRange($weekStart->format('Y-m-d'), $weekEnd->format('Y-m-d'));
 
-    $planSt = $pdo->prepare('SELECT * FROM planned_workouts WHERE date >= ? AND date <= ?');
-    $planSt->execute([$rangeStart->format('Y-m-d'), $rangeEnd->format('Y-m-d')]);
-    foreach ($planSt->fetchAll() as $r) {
-        $byDay[$r['date']]['planned'][] = $r;
-    }
-
-    /* Rapprochement prévu / réalisé (liens manuels + appariement du jour), avec cache du score */
-    $cmpByPlan = []; $cmpByAct = []; $cmpBudget = 10; $manualRows = []; $reserved = plan_reserved_ids();
+    $cmpByPlan = []; $cmpByAct = []; $manualRows = []; $reserved = plan_reserved_ids();
     foreach ($pdo->query("SELECT activity_id FROM planned_workouts WHERE activity_id IS NOT NULL AND activity_id <> ''")->fetchAll(PDO::FETCH_COLUMN) as $mid) {
         $ms = $pdo->prepare('SELECT ' . ACT_COLS . ' FROM activities WHERE id=?'); $ms->execute([$mid]); if ($mr = $ms->fetch()) $manualRows[$mid] = $mr;
     }
-    foreach ($byDay as $dKey => $dd) {
-        if (empty($dd['planned'])) continue;
-        $pairs = plan_pair_day($dd['planned'], $dd['acts'] ?? [], $manualRows, $reserved);
-        foreach ($dd['planned'] as $plRow) {
-            if (!isset($pairs[$plRow['id']])) continue;
-            $pAct = $pairs[$plRow['id']];
-            $sum = plan_cmp_summary($plRow, $pAct, $cmpBudget);
-            $cmpByPlan[$plRow['id']] = ['act' => $pAct, 'sum' => $sum];
-            if ($sum) $cmpByAct[$pAct['id']] = ['score' => $sum['score'], 'level' => $sum['level']];
+    foreach ([$byDayM, $byDayW] as $byDay) {
+        foreach ($byDay as $dd) {
+            if (empty($dd['planned'])) continue;
+            $pairs = plan_pair_day($dd['planned'], $dd['acts'] ?? [], $manualRows, $reserved);
+            foreach ($dd['planned'] as $plRow) {
+                if (!isset($pairs[$plRow['id']]) || isset($cmpByPlan[$plRow['id']])) continue;
+                $pAct = $pairs[$plRow['id']];
+                $cmpBudget = 10;
+                $sum = plan_cmp_summary($plRow, $pAct, $cmpBudget);
+                $cmpByPlan[$plRow['id']] = ['act' => $pAct, 'sum' => $sum];
+                if ($sum) $cmpByAct[$pAct['id']] = ['score' => $sum['score'], 'level' => $sum['level']];
+            }
         }
     }
 
-    $wellSt = $pdo->prepare('SELECT * FROM wellness WHERE date >= ? AND date <= ?');
-    $wellSt->execute([$rangeStart->format('Y-m-d'), $rangeEnd->format('Y-m-d')]);
-    foreach ($wellSt->fetchAll() as $r) {
-        $byDay[$r['date']]['well'] = $r;
-    }
-
-    /* ---------- Helpers de rendu partagés Mois / Semaine ---------- */
     $lvlChip = fn(?array $sm) => $sm ? ['good' => 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', 'warn' => 'bg-amber-500/15 text-amber-700 dark:text-amber-300', 'bad' => 'bg-red-500/15 text-red-700 dark:text-red-300', 'info' => 'bg-muted text-muted-foreground'][$sm['level']] ?? 'bg-muted text-muted-foreground' : 'bg-muted text-muted-foreground';
-    $chipBig = fn(string $base) => $base . ($view === 'week' ? ' text-sm gap-1.5' : ' text-xs gap-1');
 
-    $renderChip = function (array $a) use ($cmpByAct, $chipBig, $lvlChip): string {
+    $renderChip = function (array $a, bool $big) use ($cmpByAct, $lvlChip): string {
         $color = match ($a['sport']) {
             'ride' => 'border-l-sky-500 bg-sky-500/10 hover:bg-sky-500/15 dark:text-sky-100 text-sky-950',
             'run' => 'border-l-emerald-500 bg-emerald-500/10 hover:bg-emerald-500/15 dark:text-emerald-100 text-emerald-950',
@@ -3412,13 +3396,14 @@ if ($p === 'calendar') {
             'ride' => '🚴', 'run' => '🏃', 'swim' => '🏊',
             default => '⚡',
         };
+        $titleSize = $big ? 'text-sm' : 'text-xs';
         $out = '<a href="?p=activity&id=' . h($a['id']) . '" class="block p-2 rounded-lg border-l-[3px] ' . $color . ' transition shadow-2xs">';
-        $out .= '<div class="flex items-center justify-between ' . $chipBig('font-semibold leading-snug') . '"><span class="truncate">' . $ico . ' ' . h($a['name'] ?: $a['type']) . '</span>'
+        $out .= '<div class="flex items-center justify-between font-semibold leading-snug ' . $titleSize . '"><span class="truncate">' . $ico . ' ' . h($a['name'] ?: $a['type']) . '</span>'
               . '<span class="shrink-0 rounded-full bg-background/70 px-1.5 py-0.5 text-[11px] font-bold tabular-nums">' . round((float)($a['tss'] ?? 0)) . '</span></div>';
         $met = '<span>⏱ ' . fmt_dur((int)$a['duration']) . '</span>';
         if (!empty($a['distance'])) $met .= '<span>📏 ' . round((float)$a['distance'] / 1000, 1) . ' km</span>';
         if (!empty($a['elev'])) $met .= '<span>⛰ ' . round((float)$a['elev']) . ' m</span>';
-        $out .= '<div class="mt-0.5 flex flex-wrap items-center ' . $chipBig('opacity-90 tabular-nums text-[12px]') . '">' . $met . '</div>';
+        $out .= '<div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 opacity-90 tabular-nums ' . ($big ? 'text-sm' : 'text-[12px]') . '">' . $met . '</div>';
         $extra = $a['sport'] === 'run'
             ? 'allure ' . pace($a['avg_speed'] ? (float)$a['avg_speed'] : null) . '/km'
             : (!empty($a['np']) ? round((float)$a['np']) . ' W NP' : (!empty($a['avg_w']) ? round((float)$a['avg_w']) . ' W' : ''));
@@ -3431,9 +3416,9 @@ if ($p === 'calendar') {
         return $out . '</a>';
     };
 
-    $renderPlan = function (array $pl) use ($cmpByPlan, $chipBig, $lvlChip): string {
+    $renderPlan = function (array $pl, bool $big) use ($cmpByPlan, $lvlChip): string {
         $hasStruct = !empty($pl['profile']);
-        $out = '<div class="group/pl relative p-2 rounded-lg border border-dashed border-muted-foreground/40 bg-muted/20 ' . ($view === 'week' ? 'text-sm' : 'text-xs') . ' leading-tight">';
+        $out = '<div class="group/pl relative p-2 rounded-lg border border-dashed border-muted-foreground/40 bg-muted/20 ' . ($big ? 'text-sm' : 'text-xs') . ' leading-tight">';
         if (!empty($pl['icu_text']) && cfg('api_key')) {
             $sent = !empty($pl['icu_event_id']);
             $out .= '<button type="button" class="absolute right-6 top-1 flex size-5 items-center justify-center rounded text-xs hover:bg-muted ' . ($sent ? 'text-emerald-600' : 'hidden text-muted-foreground group-hover/pl:flex') . '" onclick="pushPlanned(' . (int)$pl['id'] . ')" title="' . ($sent ? 'Envoyée à intervals.icu (cliquer pour mettre à jour)' : 'Envoyer à intervals.icu') . '" aria-label="Envoyer à intervals.icu">' . ($sent ? '✓' : '↗') . '</button>';
@@ -3445,7 +3430,7 @@ if ($p === 'calendar') {
         } else {
             $out .= '<div class="truncate pr-8 font-semibold text-muted-foreground">📝 ' . h($pl['title']) . '</div>';
         }
-        $out .= '<div class="mt-1 flex items-center justify-between text-muted-foreground ' . $chipBig('tabular-nums') . '"><span>⏱ ' . fmt_dur((int)$pl['duration']) . '</span><span class="font-bold">' . round((float)$pl['tss']) . ' TSS</span></div>';
+        $out .= '<div class="mt-1 flex items-center justify-between text-muted-foreground tabular-nums ' . ($big ? 'text-sm' : 'text-xs') . '"><span>⏱ ' . fmt_dur((int)$pl['duration']) . '</span><span class="font-bold">' . round((float)$pl['tss']) . ' TSS</span></div>';
         $cp = $cmpByPlan[$pl['id']] ?? null;
         if ($cp) {
             $sm = $cp['sum'];
@@ -3468,109 +3453,104 @@ if ($p === 'calendar') {
             . '</div>';
     };
 
-    $totalsForPeriod = function () use ($byDay): array {
-        $t = ['tss' => 0.0, 'dur' => 0, 'ride' => 0.0, 'rideT' => 0, 'run' => 0.0, 'runT' => 0, 'swim' => 0.0];
-        foreach ($byDay as $dd) foreach ($dd['acts'] ?? [] as $ac) {
-            $t['tss'] += (float)($ac['tss'] ?? 0);
-            $t['dur'] += (int)($ac['duration'] ?? 0);
-            if ($ac['sport'] === 'ride') { $t['ride'] += (float)($ac['distance'] ?? 0); $t['rideT'] += (int)($ac['duration'] ?? 0); }
-            elseif ($ac['sport'] === 'run') { $t['run'] += (float)($ac['distance'] ?? 0); $t['runT'] += (int)($ac['duration'] ?? 0); }
-            elseif ($ac['sport'] === 'swim') { $t['swim'] += (float)($ac['distance'] ?? 0); }
-        }
+    $dayTssOf = function (array $dayData): float {
+        $t = 0.0;
+        foreach ($dayData['acts'] ?? [] as $ac) $t += (float)($ac['tss'] ?? 0);
+        foreach ($dayData['planned'] ?? [] as $pl) if (empty($dayData['acts'])) $t += (float)($pl['tss'] ?? 0);
         return $t;
     };
     ?>
-    <div class="space-y-6">
-      <!-- Barre de navigation -->
+    <div class="space-y-4">
+      <!-- Barre de navigation : Mois (desktop) / Semaine (mobile), commutée par le responsive -->
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-muted/30 p-3 rounded-xl border">
-        <div class="flex items-center gap-2 flex-wrap">
-          <a class="btn" data-variant="outline" data-size="sm" aria-label="Période précédente" href="<?= h($qs($prevLink)) ?>">←</a>
-          <a class="btn" data-variant="outline" data-size="sm" href="<?= h($view === 'week' ? '?p=calendar&v=week' : '?p=calendar') ?>">Aujourd’hui</a>
-          <a class="btn" data-variant="outline" data-size="sm" aria-label="Période suivante" href="<?= h($qs($nextLink)) ?>">→</a>
-          <span class="text-base sm:text-lg font-bold ml-1"><?= h($periodLabel) ?></span>
-        </div>
-        <div class="flex items-center gap-2">
-          <div class="flex items-center gap-1 bg-muted p-1 rounded-lg text-xs font-semibold" role="tablist" aria-label="Vue du calendrier">
-            <a class="px-3 py-1 rounded-md transition <?= $view === 'month' ? 'bg-background shadow-xs' : 'text-muted-foreground hover:text-foreground' ?>" <?= $view === 'month' ? 'aria-current="true"' : 'href="?p=calendar&m=' . h($calendarSwitchMonth) . '"' ?>>Mois</a>
-            <a class="px-3 py-1 rounded-md transition <?= $view === 'week' ? 'bg-background shadow-xs' : 'text-muted-foreground hover:text-foreground' ?>" <?= $view === 'week' ? 'aria-current="true"' : 'href="?p=calendar&v=week&w=' . h($calendarSwitchDay) . '"' ?>>Semaine</a>
+        <div class="max-md:contents">
+          <div class="hidden md:flex items-center gap-2">
+            <a class="btn" data-variant="outline" data-size="sm" aria-label="Mois précédent" href="?p=calendar&m=<?= $prevM ?>">←</a>
+            <a class="btn" data-variant="outline" data-size="sm" href="?p=calendar">Aujourd’hui</a>
+            <a class="btn" data-variant="outline" data-size="sm" aria-label="Mois suivant" href="?p=calendar&m=<?= $nextM ?>">→</a>
+            <span class="text-lg font-bold ml-1 capitalize"><?= h($calMoisFr[(int)$firstDayOfMonth->format('n')] . ' ' . $firstDayOfMonth->format('Y')) ?></span>
           </div>
-          <button class="btn" data-size="sm" onclick="openWorkoutModal()">＋ Planifier</button>
+          <div class="flex md:hidden items-center gap-2">
+            <a class="btn" data-variant="outline" data-size="sm" aria-label="Semaine précédente" href="?p=calendar&d=<?= $prevW ?>">←</a>
+            <a class="btn" data-variant="outline" data-size="sm" href="?p=calendar">Aujourd’hui</a>
+            <a class="btn" data-variant="outline" data-size="sm" aria-label="Semaine suivante" href="?p=calendar&d=<?= $nextW ?>">→</a>
+            <span class="text-base font-bold ml-1"><?= h($weekStart->format('j') . ' ' . $calMoisFr[(int)$weekStart->format('n')] . ' – ' . $weekEnd->format('j') . ' ' . $calMoisFr[(int)$weekEnd->format('n')]) ?></span>
+            <span class="text-xs font-semibold text-muted-foreground">· sem. <?= h($weekStart->format('W')) ?></span>
+          </div>
         </div>
+        <button class="btn" data-size="sm" onclick="openWorkoutModal()">＋ Planifier</button>
       </div>
 
-      <?php if ($view === 'week'):
-          $totals = $totalsForPeriod();
-      ?>
-      <!-- VUE SEMAINE : un jour = une carte pleine largeur (lisible sur mobile) -->
-      <div class="space-y-3">
+      <?php /* ===================== VUE SEMAINE (mobile) ===================== */ ?>
+      <div class="md:hidden space-y-3">
         <?php
-        $cursor = clone $rangeStart;
-        while ($cursor <= $rangeEnd):
+        $cursor = clone $weekStart;
+        while ($cursor <= $weekEnd):
             $cDate = $cursor->format('Y-m-d');
-            $dayActs = $byDay[$cDate]['acts'] ?? [];
-            $dayPlan = $byDay[$cDate]['planned'] ?? [];
-            $dayWell = $byDay[$cDate]['well'] ?? null;
-            $dayTss = 0.0;
-            foreach ($dayActs as $ac) $dayTss += (float)($ac['tss'] ?? 0);
-            foreach ($dayPlan as $pl) if (empty($dayActs)) $dayTss += (float)($pl['tss'] ?? 0);
+            $dayData = $byDayW[$cDate] ?? [];
             $isToday = $cDate === $today;
+            $dayTss = $dayTssOf($dayData);
         ?>
           <div class="rounded-xl border <?= $isToday ? 'ring-2 ring-primary/70 bg-primary/5 border-primary/30' : 'bg-background' ?> shadow-xs">
-            <header class="flex items-center justify-between gap-2 px-4 pt-3 pb-1.5 border-b border-border/50">
-              <div class="flex items-center gap-2.5">
-                <span class="text-sm font-bold uppercase tracking-wide text-muted-foreground w-10"><?= h(mb_substr($calJoursFr[(int)$cursor->format('N')], 0, 3)) ?></span>
-                <span class="grid place-items-center size-8 rounded-full text-base font-bold <?= $isToday ? 'bg-primary text-primary-foreground' : ('') ?>"><?= (int)$cursor->format('j') ?></span>
+            <header class="flex items-center justify-between gap-2 px-3.5 pt-3 pb-2 border-b border-border/50">
+              <div class="flex items-center gap-2.5 min-w-0">
+                <span class="w-11 shrink-0 text-sm font-bold uppercase tracking-wide text-muted-foreground"><?= h(mb_substr($calJoursFr[(int)$cursor->format('N')], 0, 3)) ?></span>
+                <span class="grid place-items-center size-9 shrink-0 rounded-full text-lg font-bold <?= $isToday ? 'bg-primary text-primary-foreground' : 'text-foreground' ?>"><?= (int)$cursor->format('j') ?></span>
                 <?php if ($isToday): ?><span class="badge">Aujourd’hui</span><?php endif; ?>
               </div>
-              <div class="flex items-center gap-2">
+              <div class="flex items-center gap-2 shrink-0">
                 <?php if ($dayTss > 0): ?><span class="rounded-full bg-muted px-2.5 py-1 text-xs font-bold tabular-nums"><?= round($dayTss) ?> TSS</span><?php endif; ?>
                 <button type="button" onclick="openWorkoutModal('<?= $cDate ?>')" class="btn" data-variant="ghost" data-size="sm" aria-label="Ajouter une séance le <?= $cDate ?>" title="Ajouter une séance">＋</button>
               </div>
             </header>
             <section class="p-3 space-y-2">
-              <?php if ($dayWell) echo $renderWell($dayWell); ?>
-              <?php if (!$dayActs && !$dayPlan): ?>
+              <?php if (!empty($dayData['well'])) echo $renderWell($dayData['well']); ?>
+              <?php if (empty($dayData['acts']) && empty($dayData['planned'])): ?>
                 <p class="py-3 text-center text-sm text-muted-foreground">Aucune séance</p>
               <?php endif; ?>
-              <?php foreach ($dayPlan as $pl) echo $renderPlan($pl); ?>
-              <?php foreach ($dayActs as $ac) echo $renderChip($ac); ?>
+              <?php foreach ($dayData['planned'] ?? [] as $pl) echo $renderPlan($pl, true); ?>
+              <?php foreach ($dayData['acts'] ?? [] as $ac) echo $renderChip($ac, true); ?>
             </section>
           </div>
         <?php $cursor->modify('+1 day'); endwhile; ?>
 
-        <!-- Résumé de la semaine -->
         <div class="rounded-xl border bg-muted/40 p-4">
           <div class="flex items-center justify-between border-b pb-2 mb-3">
-            <span class="text-xs font-bold uppercase tracking-wider text-muted-foreground">Semaine <?= h($periodWeekNum) ?></span>
-            <span class="text-xl font-black text-primary tabular-nums"><?= round($totals['tss']) ?> TSS</span>
+            <span class="text-xs font-bold uppercase tracking-wider text-muted-foreground">Semaine <?= h($weekStart->format('W')) ?></span>
+            <span class="text-xl font-black text-primary tabular-nums"><?= round(array_sum(array_map($dayTssOf, $byDayW))) ?> TSS</span>
           </div>
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-            <div><p class="text-xs text-muted-foreground">Volume total</p><p class="font-bold tabular-nums"><?= fmt_dur($totals['dur']) ?></p></div>
-            <?php if ($totals['ride'] > 0): ?><div class="text-sky-600 dark:text-sky-400"><p class="text-xs opacity-80">🚴 Vélo</p><p class="font-semibold tabular-nums"><?= round($totals['ride'] / 1000, 1) ?> km (<?= fmt_dur($totals['rideT']) ?>)</p></div><?php endif; ?>
-            <?php if ($totals['run'] > 0): ?><div class="text-emerald-600 dark:text-emerald-400"><p class="text-xs opacity-80">🏃 Course</p><p class="font-semibold tabular-nums"><?= round($totals['run'] / 1000, 1) ?> km (<?= fmt_dur($totals['runT']) ?>)</p></div><?php endif; ?>
-            <?php if ($totals['swim'] > 0): ?><div class="text-cyan-600 dark:text-cyan-400"><p class="text-xs opacity-80">🏊 Natation</p><p class="font-semibold tabular-nums"><?= round($totals['swim']) ?> m</p></div><?php endif; ?>
-          </div>
-          <div class="mt-3 pt-2 border-t border-border/60">
-            <div class="flex justify-between text-xs text-muted-foreground"><span>Charge hebdo</span><span><?= $totals['tss'] > 400 ? 'Élevée' : ($totals['tss'] > 250 ? 'Modérée' : 'Récup') ?></span></div>
-            <div class="w-full bg-muted rounded-full h-2 mt-1.5 overflow-hidden"><div class="bg-primary h-2 rounded-full" style="width: <?= min(100, round(($totals['tss'] / 600) * 100)) ?>%"></div></div>
+          <?php
+          $wt = ['dur' => 0, 'ride' => 0.0, 'rideT' => 0, 'run' => 0.0, 'runT' => 0, 'swim' => 0.0];
+          foreach ($byDayW as $dd) foreach ($dd['acts'] ?? [] as $ac) {
+              $wt['dur'] += (int)($ac['duration'] ?? 0);
+              if ($ac['sport'] === 'ride') { $wt['ride'] += (float)($ac['distance'] ?? 0); $wt['rideT'] += (int)($ac['duration'] ?? 0); }
+              elseif ($ac['sport'] === 'run') { $wt['run'] += (float)($ac['distance'] ?? 0); $wt['runT'] += (int)($ac['duration'] ?? 0); }
+              elseif ($ac['sport'] === 'swim') $wt['swim'] += (float)($ac['distance'] ?? 0);
+          }
+          ?>
+          <div class="grid grid-cols-2 gap-3 text-sm">
+            <div><p class="text-xs text-muted-foreground">Volume total</p><p class="font-bold tabular-nums"><?= fmt_dur($wt['dur']) ?></p></div>
+            <?php if ($wt['ride'] > 0): ?><div class="text-sky-600 dark:text-sky-400"><p class="text-xs opacity-80">🚴 Vélo</p><p class="font-semibold tabular-nums"><?= round($wt['ride'] / 1000, 1) ?> km (<?= fmt_dur($wt['rideT']) ?>)</p></div><?php endif; ?>
+            <?php if ($wt['run'] > 0): ?><div class="text-emerald-600 dark:text-emerald-400"><p class="text-xs opacity-80">🏃 Course</p><p class="font-semibold tabular-nums"><?= round($wt['run'] / 1000, 1) ?> km (<?= fmt_dur($wt['runT']) ?>)</p></div><?php endif; ?>
+            <?php if ($wt['swim'] > 0): ?><div class="text-cyan-600 dark:text-cyan-400"><p class="text-xs opacity-80">🏊 Natation</p><p class="font-semibold tabular-nums"><?= round($wt['swim']) ?> m</p></div><?php endif; ?>
           </div>
         </div>
       </div>
 
-      <?php else: /* ---------- VUE MOIS ---------- */ ?>
-      <div class="overflow-x-auto -mx-1 px-1">
-        <div class="min-w-[760px] sm:min-w-0 border rounded-xl overflow-hidden bg-background shadow-xs">
+      <?php /* ===================== VUE MOIS (desktop) ===================== */ ?>
+      <div class="hidden md:block">
+        <div class="border rounded-xl overflow-hidden bg-background shadow-xs">
           <div class="grid grid-cols-8 border-b bg-muted/60 text-center text-xs font-bold uppercase tracking-wide divide-x divide-border">
             <div class="py-3">Lun</div><div class="py-3">Mar</div><div class="py-3">Mer</div><div class="py-3">Jeu</div><div class="py-3">Ven</div><div class="py-3">Sam</div><div class="py-3">Dim</div>
             <div class="py-3 bg-muted/90 text-primary text-[11px]">Résumé semaine</div>
           </div>
 
           <?php
-          $cursor = clone $rangeStart;
-          while ($cursor <= $rangeEnd):
+          $cursor = clone $monthStart;
+          while ($cursor <= $monthEnd):
               $wActs = [];
-              for ($d = 0; $d < 7; $d++) {
-                  $wActs[] = ['date' => $cursor->format('Y-m-d'), 'in_month' => $cursor->format('Y-m') === $yearMonth, 'is_today' => $cursor->format('Y-m-d') === $today, 'day_num' => (int)$cursor->format('j'), 'data' => $byDay[$cursor->format('Y-m-d')] ?? []];
+              for ($i = 0; $i < 7; $i++) {
+                  $wActs[] = ['date' => $cursor->format('Y-m-d'), 'in_month' => $cursor->format('Y-m') === $yearMonth, 'is_today' => $cursor->format('Y-m-d') === $today, 'day_num' => (int)$cursor->format('j'), 'data' => $byDayM[$cursor->format('Y-m-d')] ?? []];
                   $cursor->modify('+1 day');
               }
               $weekTss = 0.0; $weekDuration = 0; $weekDistRide = 0.0; $weekDistRun = 0.0; $weekDistSwim = 0.0; $weekTimeRide = 0; $weekTimeRun = 0;
@@ -3580,36 +3560,30 @@ if ($p === 'calendar') {
                   elseif ($ac['sport'] === 'run') { $weekDistRun += (float)($ac['distance'] ?? 0); $weekTimeRun += (int)$ac['duration']; }
                   elseif ($ac['sport'] === 'swim') $weekDistSwim += (float)($ac['distance'] ?? 0);
               }
-              $weekNum = (new DateTime($wActs[0]['date']))->format('W');
+              $weekNum = $wActs[0]['date'] ? date('W', strtotime($wActs[0]['date'])) : '';
           ?>
           <div class="grid grid-cols-8 divide-x divide-border border-b last:border-b-0">
             <?php foreach ($wActs as $wd):
-                $dayActs = $wd['data']['acts'] ?? [];
-                $dayPlan = $wd['data']['planned'] ?? [];
-                $dayWell = $wd['data']['well'] ?? null;
-                $dayTss = 0.0;
-                foreach ($dayActs as $ac) $dayTss += (float)($ac['tss'] ?? 0);
-                foreach ($dayPlan as $pl) if (empty($dayActs)) $dayTss += (float)($pl['tss'] ?? 0);
+                $dayData = $wd['data'];
             ?>
               <div class="p-2.5 flex flex-col justify-between min-h-[180px] <?= $wd['is_today'] ? 'bg-primary/5 ring-1 ring-primary/60 ring-inset' : ($wd['in_month'] ? 'hover:bg-muted/15' : 'bg-muted/20 opacity-50') ?> transition relative group">
                 <div class="flex items-center justify-between mb-2">
-                  <span class="<?= $wd['is_today'] ? 'grid place-items-center size-7 rounded-full bg-primary text-primary-foreground text-sm font-bold' : 'text-sm font-bold' ?> tabular-nums"><?= $wd['day_num'] ?></span>
+                  <span class="<?= $wd['is_today'] ? 'grid place-items-center size-7 rounded-full bg-primary text-primary-foreground' : '' ?> text-sm font-bold tabular-nums"><?= $wd['day_num'] ?></span>
                   <div class="flex items-center gap-1.5">
-                    <?php if ($dayTss > 0): ?><span class="text-[11px] font-bold px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground tabular-nums"><?= round($dayTss) ?></span><?php endif; ?>
+                    <?php if (($dt = $dayTssOf($dayData)) > 0): ?><span class="text-[11px] font-bold px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground tabular-nums"><?= round($dt) ?></span><?php endif; ?>
                     <button type="button" onclick="openWorkoutModal('<?= $wd['date'] ?>')" class="size-5 rounded hover:bg-muted text-muted-foreground flex items-center justify-center text-sm opacity-60 group-hover:opacity-100 transition" title="Ajouter une séance">+</button>
                   </div>
                 </div>
 
-                <?php if ($dayWell) echo $renderWell($dayWell); ?>
+                <?php if (!empty($dayData['well'])) echo $renderWell($dayData['well']); ?>
 
                 <div class="flex-1 space-y-2 overflow-y-auto max-h-[320px]">
-                  <?php foreach ($dayPlan as $pl) echo $renderPlan($pl); ?>
-                  <?php foreach ($dayActs as $ac) echo $renderChip($ac); ?>
+                  <?php foreach ($dayData['planned'] ?? [] as $pl) echo $renderPlan($pl, false); ?>
+                  <?php foreach ($dayData['acts'] ?? [] as $ac) echo $renderChip($ac, false); ?>
                 </div>
               </div>
             <?php endforeach; ?>
 
-            <!-- Carte de résumé hebdo -->
             <div class="p-3.5 bg-muted/40 flex flex-col justify-between border-l border-border">
               <div>
                 <div class="flex items-center justify-between border-b pb-1.5 mb-2.5">
@@ -3632,7 +3606,6 @@ if ($p === 'calendar') {
           <?php endwhile; ?>
         </div>
       </div>
-      <?php endif; ?>
     </div>
     <?php foot(); exit;
 }
