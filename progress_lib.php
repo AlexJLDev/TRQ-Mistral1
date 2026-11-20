@@ -83,7 +83,10 @@ function progress_weeks(int $count = 10): array {
     $blank = fn(): array => ['sessions' => 0, 'time' => 0, 'km' => 0.0, 'km_sport' => ['ride' => 0.0, 'run' => 0.0, 'swim' => 0.0, 'other' => 0.0],
                              'tss' => 0.0, 'rpe_sum' => 0.0, 'rpe_n' => 0, 'feel' => [], 'weight_n' => 0, 'weight_sum' => 0.0];
     $weeks = [];
-    for ($i = $count - 1; $i >= 0; $i--) $weeks[(clone $monday)->modify("-$i weeks")->format('Y-m-d')] = $blank();
+    for ($i = $count - 1; $i >= 0; $i--) {
+        $k = (clone $monday)->modify("-$i weeks")->format('Y-m-d');
+        $weeks[$k] = ['monday' => $k] + $blank();
+    }
 
     $st = $pdo->prepare("SELECT substr(date,1,10) d, sport, duration, distance, tss, rpe, feel FROM activities WHERE substr(date,1,10) >= ?");
     $st->execute([$start]);
