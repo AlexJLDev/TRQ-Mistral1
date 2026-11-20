@@ -69,15 +69,15 @@ if ($p === 'calendar' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
 /* ---------- Helpers d'affichage & Basecoat UI ---------- */
 function stat_card(string $label, string $value, string $sub = '', string $iconSvg = ''): void {
-    echo '<div class="card p-4 transition-all hover:border-foreground/30">';
-    echo '<div class="flex items-center justify-between">';
-    echo '<span class="text-xs font-medium text-muted-foreground uppercase tracking-wider">' . h($label) . '</span>';
-    if ($iconSvg) echo '<span class="text-muted-foreground/70">' . $iconSvg . '</span>';
+    echo '<div class="card p-3 md:p-4 transition-all hover:border-foreground/30 min-w-0">';
+    echo '<div class="flex items-center justify-between gap-1">';
+    echo '<span class="text-[11px] md:text-xs font-medium text-muted-foreground uppercase tracking-wider truncate">' . h($label) . '</span>';
+    if ($iconSvg) echo '<span class="text-muted-foreground/70 shrink-0">' . $iconSvg . '</span>';
     echo '</div>';
-    echo '<div class="mt-2 flex items-baseline gap-2">';
-    echo '<span class="text-2xl font-bold tracking-tight tabular-nums">' . $value . '</span>';
+    echo '<div class="mt-1.5 md:mt-2 flex items-baseline gap-2">';
+    echo '<span class="text-xl md:text-2xl font-bold tracking-tight tabular-nums">' . $value . '</span>';
     echo '</div>';
-    if ($sub) echo '<div class="mt-1 text-xs text-muted-foreground">' . $sub . '</div>';
+    if ($sub) echo '<div class="mt-1 text-[11px] md:text-xs text-muted-foreground">' . $sub . '</div>';
     echo '</div>';
 }
 
@@ -1194,12 +1194,12 @@ if ($p === 'activity') {
 
       
       <div class="tabs w-full" id="actTabs">
-        <nav role="tablist" aria-orientation="horizontal" class="w-full flex-wrap">
-          <button type="button" role="tab" id="act-tab-synthese" aria-controls="act-panel-synthese" aria-selected="true" tabindex="0">📋 Synthèse</button>
-          <button type="button" role="tab" id="act-tab-telem" aria-controls="act-panel-telem" aria-selected="false" tabindex="-1">📈 Télémétrie</button>
-          <?php if (!empty($laps)): ?><button type="button" role="tab" id="act-tab-intervalles" aria-controls="act-panel-intervalles" aria-selected="false" tabindex="-1">🔁 Intervalles</button><?php endif; ?>
-          <button type="button" role="tab" id="act-tab-analyses" aria-controls="act-panel-analyses" aria-selected="false" tabindex="-1">🔬 Analyses avancées</button>
-          <button type="button" role="tab" id="act-tab-distributions" aria-controls="act-panel-distributions" aria-selected="false" tabindex="-1">📊 Distributions</button>
+        <nav role="tablist" aria-orientation="horizontal" class="w-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <button type="button" role="tab" id="act-tab-synthese" aria-controls="act-panel-synthese" aria-selected="true" tabindex="0" class="shrink-0 whitespace-nowrap">📋 Synthèse</button>
+          <button type="button" role="tab" id="act-tab-telem" aria-controls="act-panel-telem" aria-selected="false" tabindex="-1" class="shrink-0 whitespace-nowrap">📈 Télémétrie</button>
+          <?php if (!empty($laps)): ?><button type="button" role="tab" id="act-tab-intervalles" aria-controls="act-panel-intervalles" aria-selected="false" tabindex="-1" class="shrink-0 whitespace-nowrap">🔁 Intervalles</button><?php endif; ?>
+          <button type="button" role="tab" id="act-tab-analyses" aria-controls="act-panel-analyses" aria-selected="false" tabindex="-1" class="shrink-0 whitespace-nowrap">🔬 Analyses avancées</button>
+          <button type="button" role="tab" id="act-tab-distributions" aria-controls="act-panel-distributions" aria-selected="false" tabindex="-1" class="shrink-0 whitespace-nowrap">📊 Distributions</button>
         </nav>
         <div role="tabpanel" id="act-panel-synthese" aria-labelledby="act-tab-synthese" tabindex="-1" aria-selected="true" class="space-y-6">
 
@@ -2815,6 +2815,7 @@ if ($p === 'activity') {
     const sel = document.getElementById('mapTiles');
     sel.value = tileKey; sel.onchange = e => { localStorage.mapTiles = e.target.value; setTiles(e.target.value); };
     map.fitBounds(L.latLngBounds(g.pts), {padding: [30, 30]});
+    window.trqMapFit = () => map.fitBounds(L.latLngBounds(G.pts), { padding: [30, 30] });
     map.on('focus', () => map.scrollWheelZoom.enable()); map.on('blur', () => map.scrollWheelZoom.disable());
     drawTabs(); draw();
     setTimeout(() => map.invalidateSize(), 250);
@@ -2999,7 +3000,10 @@ const IS_RUN_PAGE = <?= $isRun ? 'true' : 'false' ?>;
             const panel = document.getElementById(target);
             if (!panel) return;
             panel.querySelectorAll('canvas').forEach(cv => { const c = window.Chart && Chart.getChart(cv); if (c) { c.resize(); c.update('none'); } });
-            if (target === 'act-panel-telem' && window.trqMap) window.trqMap.invalidateSize();
+            if (target === 'act-panel-telem' && window.trqMap) {
+              window.trqMap.invalidateSize();
+              if (window.trqMapFit && !window.trqMap._trqFit) { window.trqMap._trqFit = true; window.trqMapFit(); }
+            }
             const h = location.hash ? document.querySelector(location.hash) : null;
             if (h && h.closest('[role=tabpanel]') === panel) h.scrollIntoView({ block: 'start' });
           });
