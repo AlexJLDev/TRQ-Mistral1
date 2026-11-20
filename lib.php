@@ -125,6 +125,8 @@ function db(): PDO {
         if (!in_array('wko_metrics', $cols, true)) $pdo->exec("ALTER TABLE activities ADD COLUMN wko_metrics TEXT");
         if (!in_array('laps', $cols, true)) $pdo->exec("ALTER TABLE activities ADD COLUMN laps TEXT");
         if (!in_array('custom_laps', $cols, true)) $pdo->exec("ALTER TABLE activities ADD COLUMN custom_laps TEXT");
+        if (!in_array('rpe', $cols, true)) $pdo->exec("ALTER TABLE activities ADD COLUMN rpe INTEGER");
+        if (!in_array('feel', $cols, true)) $pdo->exec("ALTER TABLE activities ADD COLUMN feel TEXT");
         $pcols = array_column($pdo->query("PRAGMA table_info(planned_workouts)")->fetchAll(), 'name');
         foreach (['structure' => 'TEXT', 'profile' => 'TEXT', 'workout_id' => 'INTEGER', 'icu_event_id' => 'TEXT', 'icu_text' => 'TEXT', 'activity_id' => 'TEXT', 'cmp_key' => 'TEXT', 'cmp_json' => 'TEXT'] as $c => $t)
             if (!in_array($c, $pcols, true)) $pdo->exec("ALTER TABLE planned_workouts ADD COLUMN $c $t");

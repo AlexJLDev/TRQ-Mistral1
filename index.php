@@ -1067,6 +1067,11 @@ if ($p === 'activity') {
         foot(); exit;
     }
 
+    $FEEL_LB = ['top' => 'Au top 💪', 'bien' => 'Bien 🙂', 'normal' => 'Normal 😐', 'dur' => 'Dur 😕', 'epuise' => 'Épuisé 🥵'];
+    $actRpe = ($a['rpe'] ?? null) !== null && $a['rpe'] !== '' ? (int)$a['rpe'] : null;
+    $actFeel = ($a['feel'] ?? null) ?: null;
+    $askFeel = $actRpe === null || $actFeel === null;
+
     $S = $a['streams'] ? (json_decode(gzuncompress($a['streams']), true) ?: []) : [];
     $isRun = $a['sport'] === 'run';
     $wko = !empty($a['wko_metrics']) ? (json_decode($a['wko_metrics'], true) ?: []) : [];
@@ -1157,6 +1162,9 @@ if ($p === 'activity') {
           ← Retour aux activités
         </a>
         <div class="flex items-center gap-2">
+          <button type="button" class="btn" data-variant="outline" data-size="sm" title="RPE & ressenti de la séance" onclick="document.getElementById('modal-feel').showModal()">
+            <span id="feelChipText"><span class="font-semibold">RPE</span> <?= $actRpe !== null ? $actRpe . '/10' : '—' ?><?= $actFeel !== null && isset($FEEL_LB[$actFeel]) ? ' · ' . h($FEEL_LB[$actFeel]) : '' ?></span>
+          </button>
           <?= tss_badge($a['tss'] !== null ? (float)$a['tss'] : null, $a['tss_type'] ?? 'power') ?>
           <?= sport_badge($a['sport'], $a['type']) ?>
         </div>
@@ -1207,6 +1215,64 @@ if ($p === 'activity') {
           actCancelName();
         } catch (e) { alert(e.message); }
       }
+      </script>
+
+      <dialog class="dialog" id="modal-feel"
+              onpointerdown="this.dataset.backdropPress = event.target === this"
+              onclick="if (event.target === this && this.dataset.backdropPress === 'true') this.close()">
+        <div class="sm:max-w-md w-full">
+          <header class="flex items-center justify-between pb-3 border-b mb-4">
+            <div>
+              <h3 class="text-base font-semibold">RPE & ressenti de la séance</h3>
+              <p class="text-xs text-muted-foreground">Charge perçue et sensation — complètent la charge objective (TSS)</p>
+            </div>
+            <button type="button" class="btn" data-variant="ghost" data-size="icon" onclick="this.closest('dialog').close()">✕</button>
+          </header>
+          <section class="space-y-4">
+            <div class="field">
+              <label class="text-xs font-medium">RPE — effort perçu (1 à 10)</label>
+              <div class="flex items-center gap-3 mt-1">
+                <input type="range" min="1" max="10" step="1" id="feelRpe" value="<?= $actRpe ?? 5 ?>" class="w-full accent-primary" oninput="document.getElementById('feelRpeVal').textContent = this.value + '/10';">
+                <span class="text-sm font-semibold tabular-nums w-12 text-right" id="feelRpeVal"><?= $actRpe !== null ? $actRpe . '/10' : '5/10' ?></span>
+              </div>
+              <p class="mt-1 text-[11px] text-muted-foreground">1 = très très facile · 5 = soutenu · 7 = dur · 10 = maximal</p>
+            </div>
+            <div class="field">
+              <label class="text-xs font-medium">Sensation générale</label>
+              <div class="flex flex-wrap gap-1.5 mt-1" id="feelOptions">
+                <?php foreach ($FEEL_LB as $k => $v): ?>
+                <button type="button" class="btn" data-size="sm" data-k="<?= h($k) ?>" <?= $actFeel === $k ? '' : 'data-variant="outline"' ?> onclick="actPickFeel(this)"><?= h($v) ?></button>
+                <?php endforeach; ?>
+              </div>
+            </div>
+          </section>
+          <footer class="flex items-center justify-between gap-2 pt-3 border-t mt-4">
+            <span class="text-[11px] text-muted-foreground">Modifiable à tout moment via le badge en haut.</span>
+            <div class="flex items-center gap-2">
+              <button type="button" class="btn" data-variant="ghost" data-size="sm" onclick="this.closest('dialog').close()">Plus tard</button>
+              <button type="button" class="btn" data-size="sm" onclick="actSaveFeel()">Enregistrer</button>
+            </div>
+          </footer>
+        </div>
+      </dialog>
+      <script>
+      const FEEL_LB = <?= json_encode($FEEL_LB, JSON_UNESCAPED_UNICODE) ?>;
+      let actFeelSel = <?= json_encode($actFeel ?? 'bien') ?>;
+      function actPickFeel(btn) {
+        actFeelSel = btn.dataset.k;
+        document.querySelectorAll('#feelOptions button').forEach(b => { if (b === btn) b.removeAttribute('data-variant'); else b.setAttribute('data-variant', 'outline'); });
+      }
+      async function actSaveFeel() {
+        const rpe = document.getElementById('feelRpe').value;
+        try {
+          await call('activity_feel', {id: <?= json_encode($a['id']) ?>, rpe, feel: actFeelSel});
+          document.getElementById('feelChipText').innerHTML = '<span class="font-semibold">RPE</span> ' + rpe + '/10' + (actFeelSel && FEEL_LB[actFeelSel] ? ' · ' + FEEL_LB[actFeelSel] : '');
+          document.getElementById('modal-feel').close();
+        } catch (e) { alert(e.message); }
+      }
+      <?php if ($askFeel): ?>
+      document.getElementById('modal-feel').showModal();
+      <?php endif; ?>
       </script>
 
       <!-- Métriques phares WKO5 & TrainingPeaks -->

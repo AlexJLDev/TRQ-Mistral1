@@ -126,6 +126,15 @@ try {
         db()->prepare('UPDATE activities SET name=? WHERE id=?')->execute([$rname, $rid]);
         echo json_encode(['ok' => true, 'name' => $rname]);
 
+    } elseif ($action === 'activity_feel') {
+        $fid = (string)($_POST['id'] ?? '');
+        $frpe = isset($_POST['rpe']) && $_POST['rpe'] !== '' ? max(1, min(10, (int)$_POST['rpe'])) : null;
+        $ffeel = trim((string)($_POST['feel'] ?? ''));
+        if ($fid === '') throw new RuntimeException('Activité introuvable.');
+        if ($frpe === null && $ffeel === '') throw new RuntimeException('Renseignez au moins le RPE ou la sensation.');
+        db()->prepare('UPDATE activities SET rpe=?, feel=? WHERE id=?')->execute([$frpe, $ffeel !== '' ? $ffeel : null, $fid]);
+        echo json_encode(['ok' => true]);
+
     } elseif ($action === 'lap_delete') {
         $laps = custom_lap_delete((string)$_POST['id'], (int)$_POST['lap']);
         echo json_encode(['ok' => true, 'count' => count($laps)]);
