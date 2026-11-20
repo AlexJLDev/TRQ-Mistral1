@@ -144,7 +144,7 @@ if (localStorage.theme === 'dark' || (!localStorage.theme && matchMedia('(prefer
 </script>
 <!-- Assets 100 % locaux (assets/vendor) : aucune dépendance CDN, donc plus de page blanche si le réseau est lent ou bloqué -->
 <script>
-var bcStyle = localStorage.bcStyle || 'vega';
+var bcStyle = localStorage.bcStyle || 'mira';
 document.write('<link rel="stylesheet" href="assets/vendor/basecoat-' + bcStyle + '.cdn.min.css">');
 </script>
 <?= brand_css() ?>
@@ -288,9 +288,6 @@ $groups = [
     <span class="hidden text-sm text-muted-foreground sm:inline">/</span>
     <span class="truncate text-sm font-medium"><?= h($title) ?></span>
     <span class="flex-1"></span>
-    <select id="styleSel" class="select h-8 w-24 text-sm" aria-label="Style Basecoat">
-      <?php foreach (['vega', 'nova', 'maia', 'lyra', 'mira', 'luma', 'sera', 'rhea'] as $s) echo '<option value="' . $s . '">' . ucfirst($s) . '</option>'; ?>
-    </select>
     <button class="btn gap-2" data-variant="outline" data-size="sm" id="syncBtn">
       <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
       <span class="hidden sm:inline">Synchroniser</span>
@@ -497,7 +494,7 @@ function openWellnessModal(dateStr = '') {
 
 const styleSel = document.getElementById('styleSel');
 if (styleSel) {
-    styleSel.value = localStorage.bcStyle || 'vega';
+    styleSel.value = localStorage.bcStyle || 'mira';
     styleSel.onchange = e => { localStorage.bcStyle = e.target.value; location.reload(); };
 }
 document.getElementById('themeBtn').onclick = () => {
@@ -4190,6 +4187,19 @@ if ($p === 'settings') {
       <div>
         <h1 class="text-2xl font-bold tracking-tight">Paramètres physiologiques & Connexions</h1>
         <p class="text-sm text-muted-foreground">Configurez vos seuils d'entraînement et la synchronisation avec intervals.icu</p>
+      </div>
+
+      <div class="card p-6 space-y-3">
+        <header>
+          <h3 class="text-base font-semibold">Apparence</h3>
+          <p class="text-xs text-muted-foreground">Style de l'interface (Basecoat) — appliqué immédiatement, mémorisé sur cet appareil</p>
+        </header>
+        <div class="field max-w-56">
+          <label class="text-xs font-medium">Style</label>
+          <select id="styleSel" class="select h-9 text-sm">
+            <?php foreach (['vega', 'nova', 'maia', 'lyra', 'mira', 'luma', 'sera', 'rhea'] as $s) echo '<option value="' . $s . '">' . ucfirst($s) . '</option>'; ?>
+          </select>
+        </div>
       </div>
 
       <?php if (isset($_GET['saved'])): ?>
