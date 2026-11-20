@@ -1413,9 +1413,6 @@ if ($p === 'activity') {
               <label class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-muted/60 cursor-pointer text-slate-400 font-semibold border border-slate-500/20 text-[11px]">
                 <input type="checkbox" id="chk-alt" checked onchange="toggleDataset(5, this.checked)"> Alt.
               </label>
-              <label class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-muted/60 cursor-pointer text-slate-400 font-semibold border border-slate-500/20 text-[11px]">
-                <input type="checkbox" id="chk-alt" checked onchange="toggleDataset(5, this.checked)"> Alt.
-              </label>
               <?php if (!empty($gradeSeries)): ?>
                 <label class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-muted/60 cursor-pointer text-teal-500 font-semibold border border-teal-500/20 text-[11px]">
                   <input type="checkbox" id="chk-grade" checked onchange="toggleDataset(<?= $wb ? 7 : 6 ?>, this.checked)"> Pente
@@ -1431,16 +1428,16 @@ if ($p === 'activity') {
                   <input type="checkbox" id="chk-wb" checked onchange="toggleDataset(6, this.checked)"> W'bal
                 </label>
               <?php endif; ?>
-              <?php if ($wb): ?>
-                <label class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-muted/60 cursor-pointer text-purple-500 font-semibold border border-purple-500/20 text-[11px]">
-                  <input type="checkbox" id="chk-wb" checked onchange="toggleDataset(6, this.checked)"> W'bal
-                </label>
-              <?php endif; ?>
             </div>
           </div>
         </header>
 
         <section class="p-4">
+          <div class="flex items-center justify-between gap-2 mb-2 text-[11px] text-muted-foreground">
+            <span>Molette : zoom · Double-clic : dézoomer · Glisser : sélection d'un tour</span>
+            <button type="button" id="zoomReset" class="hidden shrink-0 px-2 py-0.5 rounded-md border hover:bg-muted" onclick="zoomReset()">Réinitialiser le zoom</button>
+          </div>
+
           <!-- 1. Conteneur Graphique Unique (Superposé) -->
           <div id="container-overlay" class="w-full">
             <div class="h-96 w-full"><canvas id="fullTelemetry"></canvas></div>
@@ -2191,6 +2188,83 @@ if ($p === 'activity') {
         }
     });
 
+    // =============================================================
+    // Graphes liés : survol synchronisé (index temporel commun) + zoom molette
+    // =============================================================
+    const linkedCharts = [];
+    let syncHover = false;
+    const zoomState = { a: null, b: null };       // bornes d'index (null = vue complète)
+
+    Chart.register({
+        id: 'crosshairLine',
+        afterDatasetsDraw(chart) {
+            const i = chart.$hoverIndex;
+            if (i == null || !chart.$link) return;
+            const x = chart.scales.x, area = chart.chartArea, ctx = chart.ctx;
+            const px = x.getPixelForValue(i);
+            if (!isFinite(px) || px < area.left || px > area.right) return;
+            ctx.save(); ctx.strokeStyle = 'rgba(148,163,184,.65)'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+            ctx.beginPath(); ctx.moveTo(px, area.top); ctx.lineTo(px, area.bottom); ctx.stroke(); ctx.restore();
+        }
+    });
+    Chart.register({
+        id: 'idxLink',
+        afterEvent(chart, args) {
+            if (syncHover || !chart.$link || chart.canvas.offsetParent === null) return;
+            const ev = args.event;
+            if (ev.type !== 'mousemove' && ev.type !== 'mouseout') return;
+            if (ev.type === 'mousemove' && !args.inChartArea) return;
+            const els = ev.type === 'mouseout' ? [] : chart.getElementsAtEventForMode(ev, 'nearest', { intersect: false, axis: 'x' }, true);
+            const idx = els.length ? els[0].index : null;
+            syncHover = true;
+            linkedCharts.forEach(c => { if (c.canvas.offsetParent !== null) setLinkHover(c, idx); });
+            syncHover = false;
+        }
+    });
+
+    function setLinkHover(chart, idx) {
+        chart.$hoverIndex = idx;
+        let di = -1;
+        if (idx != null) di = chart.data.datasets.findIndex(ds => !ds.hidden && ds.data && ds.data[idx] != null);
+        const els = di >= 0 ? [{ datasetIndex: di, index: idx }] : [];
+        const pos = { x: chart.chartArea.left, y: chart.chartArea.top };
+        chart.setActiveElements(els, pos);
+        chart.tooltip.setActiveElements(els, pos);
+        chart.update('none');
+    }
+
+    function applyZoom() {
+        linkedCharts.forEach(c => { c.options.scales.x.min = zoomState.a; c.options.scales.x.max = zoomState.b; c.update('none'); });
+        const b = document.getElementById('zoomReset');
+        if (b) b.classList.toggle('hidden', zoomState.a == null);
+    }
+    function zoomAt(chart, ev, factor) {
+        const n = labels.length;
+        if (!n) return;
+        const r = chart.canvas.getBoundingClientRect();
+        const raw = chart.scales.x.getValueForPixel(ev.clientX - r.left);
+        const cur = Math.max(0, Math.min(n - 1, raw));
+        const a0 = zoomState.a ?? 0, b0 = zoomState.b ?? n - 1;
+        let a = cur - (cur - a0) * factor, b = cur + (b0 - cur) * factor;
+        const MINW = Math.min(9, n - 1);
+        if (b - a < MINW) { const m = (a + b) / 2; a = m - MINW / 2; b = m + MINW / 2; }
+        a = Math.max(0, Math.round(a)); b = Math.min(n - 1, Math.round(b));
+        if (b - a < 1) return;
+        zoomState.a = a; zoomState.b = b; applyZoom();
+    }
+    function zoomReset() {
+        if (zoomState.a == null) return;
+        zoomState.a = zoomState.b = null; applyZoom();
+    }
+    function attachZoom(chart) {
+        chart.canvas.addEventListener('wheel', ev => {
+            if (ev.deltaY > 0 && zoomState.a == null) return;      // déjà dézoomé à fond : laisser défiler la page
+            ev.preventDefault();
+            zoomAt(chart, ev, ev.deltaY > 0 ? 1.15 : 1 / 1.15);
+        }, { passive: false });
+        chart.canvas.addEventListener('dblclick', zoomReset);
+    }
+
     function selRedraw() { selCharts.forEach(c => c.draw()); }
     function selClear() {
         SEL = null;
@@ -2220,6 +2294,8 @@ if ($p === 'activity') {
     }
     function attachSelection(chart) {
         chart.$sel = true; selCharts.push(chart);
+        chart.$link = true; linkedCharts.push(chart);
+        attachZoom(chart);
         const cv = chart.canvas; cv.style.touchAction = 'pan-y'; cv.style.cursor = 'crosshair';
         let drag = null;
         const idx = ev => { const r = cv.getBoundingClientRect(); const v = chart.scales.x.getValueForPixel(ev.clientX - r.left); return Math.max(0, Math.min(labels.length - 1, Math.round(v))); };
@@ -2560,6 +2636,7 @@ if ($p === 'activity') {
             }));
         }
         stackedCharts.forEach(attachSelection);
+        applyZoom();
     }
 
     function switchTelemetryLayout(mode) {
