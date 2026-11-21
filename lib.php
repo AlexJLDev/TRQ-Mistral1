@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/auth_lib.php';
+require_once __DIR__ . '/lang.php';
 require_once __DIR__ . '/diagnostic.php';
 require_once __DIR__ . '/plan_compare.php';
 require_once __DIR__ . '/nutrition_lib.php';
@@ -167,6 +168,56 @@ function cfg(string $k, $default = null) {
 function cfg_set(string $k, string $v): void {
     if ($k === 'api_key') $v = enc_secret($v);
     db()->prepare('INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v')->execute([$k, $v]);
+}
+
+/* ---------- photo de profil (BLOB dans auth.sqlite, servie par ?p=avatar) ---------- */
+
+/** Infos (mime, horodatage) de la photo de l'utilisateur connecté — null si aucune. */
+function avatar_info(): ?array {
+    static $r = false;
+    if ($r === false) {
+        $r = null;
+        try {
+            if (auth_enabled() && current_uid() > 0) {
+                $st = auth_db()->prepare('SELECT avatar_mime, avatar_ts FROM users WHERE id=?');
+                $st->execute([current_uid()]);
+                $row = $st->fetch();
+                if ($row && $row['avatar_ts']) $r = ['mime' => (string)$row['avatar_mime'], 'ts' => (int)$row['avatar_ts']];
+            }
+        } catch (\Throwable $e) { $r = null; }
+    }
+    return $r;
+}
+
+/** Valide et retaille l'image envoyée (carré 256px si GD dispo), renvoie [bytes, mime] ou lance RuntimeException. */
+function avatar_process(array $f): array {
+    if (($f['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) throw new RuntimeException('Envoi du fichier impossible (trop gros ou requête interrompue).');
+    if ($f['size'] > 4194304) throw new RuntimeException('Image trop lourde (4 Mo max).');
+    $bin = @file_get_contents($f['tmp_name']);
+    $info = $bin === false ? null : @getimagesizefromstring($bin);
+    if (!$info || !in_array($info['mime'], ['image/jpeg', 'image/png', 'image/webp', 'image/gif'], true)) throw new RuntimeException('Fichier non reconnu comme une image (JPEG, PNG, WebP ou GIF).');
+    $mime = $info['mime'];
+    if (!function_exists('imagecreatetruecolor') || $mime === 'image/gif') return [$bin, $mime];   // GIF animé ou absent de GD : original conservé
+    $src = @imagecreatefromstring($bin);
+    if (!$src) return [$bin, $mime];
+    $w = imagesx($src); $h = imagesy($src);
+    if ($w === 256 && $h === 256) { imagedestroy($src); return [$bin, $mime]; }
+    $side = min($w, $h); $sx = (int)floor(($w - $side) / 2); $sy = (int)floor(($h - $side) / 2);
+    $dst = imagecreatetruecolor(256, 256);
+    if (in_array($mime, ['image/png', 'image/webp'], true)) {
+        imagealphablending($dst, false); imagesavealpha($dst, true);
+        imagefilledrectangle($dst, 0, 0, 256, 256, imagecolorallocatealpha($dst, 0, 0, 0, 127));
+    }
+    imagecopyresampled($dst, $src, 0, 0, $sx, $sy, 256, 256, $side, $side);
+    imagedestroy($src);
+    ob_start();
+    if ($mime === 'image/png') imagepng($dst, null, 6);
+    elseif ($mime === 'image/webp' && function_exists('imagewebp')) imagewebp($dst, null, 88);
+    else { imagejpeg($dst, null, 86); $mime = 'image/jpeg'; }
+    imagedestroy($dst);
+    $out = (string)ob_get_clean();
+    if ($out === '') return [$bin, $info['mime']];
+    return [$out, $mime];
 }
 
 /* ---------- intervals.icu API ---------- */
@@ -1702,3 +1753,6 @@ function fmt_dur_full(int $s): string {
 function fmt_label(int $s): string {
     return $s < 60 ? "{$s}s" : ($s < 3600 ? intdiv($s, 60) . 'min' : round($s / 3600, 1) . 'h');
 }
+
+/* ---------- i18n : filtre de sortie traduit le HTML des pages (index, login) ---------- */
+ob_start('trq_translate_html');

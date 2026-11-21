@@ -7,8 +7,44 @@ ob_start('csrf_inject_cb');                  // ajoute le jeton CSRF à tous les
 $p = $_GET['p'] ?? 'dashboard';
 $pdo = db();
 
+/* ---------- Photo de profil servie depuis auth.sqlite ---------- */
+if ($p === 'avatar') {
+    $st = auth_db()->prepare('SELECT avatar, avatar_mime FROM users WHERE id=?');
+    $st->execute([current_uid()]);
+    $row = $st->fetch();
+    $blob = $row && $row['avatar'] !== null ? (is_resource($row['avatar']) ? stream_get_contents($row['avatar']) : (string)$row['avatar']) : null;
+    if ($blob === null || $blob === '') { http_response_code(404); exit; }
+    header('Content-Type: ' . ($row['avatar_mime'] ?: 'application/octet-stream'));
+    header('Content-Length: ' . strlen($blob));
+    header('Cache-Control: private, max-age=86400');
+    echo $blob;
+    exit;
+}
+
 /* ---------- Paramètres POST ---------- */
 if ($p === 'settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    /* Photo de profil : mini-formulaire dédié (upload ou suppression) */
+    if (array_key_exists('avatar_post', $_POST)) {
+        try {
+            if (array_key_exists('avatar_remove', $_POST)) {
+                auth_db()->prepare('UPDATE users SET avatar=NULL, avatar_mime=NULL, avatar_ts=NULL WHERE id=?')->execute([current_uid()]);
+            } else {
+                [$blob, $mime] = avatar_process($_FILES['avatar_file'] ?? []);
+                auth_db()->prepare('UPDATE users SET avatar=?, avatar_mime=?, avatar_ts=? WHERE id=?')->execute([$blob, $mime, time(), current_uid()]);
+            }
+            header('Location: ?p=settings&saved=1');
+        } catch (RuntimeException $e) {
+            header('Location: ?p=settings&err=' . urlencode($e->getMessage()));
+        }
+        exit;
+    }
+    /* Sélecteur de langue : mini-formulaire dédié (ne touche pas aux autres réglages) */
+    if (array_key_exists('lang', $_POST) && !array_key_exists('api_key', $_POST)) {
+        $lang = trim($_POST['lang']);
+        if (array_key_exists($lang, trq_langs())) cfg_set('lang', $lang);
+        header('Location: ?p=settings&saved=1');
+        exit;
+    }
     foreach (['api_key', 'athlete_id', 'ftp', 'lthr', 'max_hr', 'rest_hr', 'base_hrv', 'weight', 'body_fat'] as $k) {
         cfg_set($k, trim($_POST[$k] ?? ''));
     }
@@ -150,30 +186,30 @@ function render_goals_grid(array $gs): void {
 }
 
 function readiness_badge(?float $score): string {
-    if ($score === null) return '<span class="badge" data-variant="outline">Non renseigné</span>';
-    if ($score >= 80) return '<span class="badge bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">Optimal (' . round($score) . ')</span>';
-    if ($score >= 65) return '<span class="badge bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30">Bon (' . round($score) . ')</span>';
-    if ($score >= 50) return '<span class="badge bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">Modéré (' . round($score) . ')</span>';
-    return '<span class="badge" data-variant="destructive">Récup. requise (' . round($score) . ')</span>';
+    if ($score === null) return '<span class="badge" data-variant="outline">' . t('Non renseigné') . '</span>';
+    if ($score >= 80) return '<span class="badge bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">' . t('Optimal (') . round($score) . ')</span>';
+    if ($score >= 65) return '<span class="badge bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30">' . t('Bon (') . round($score) . ')</span>';
+    if ($score >= 50) return '<span class="badge bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">' . t('Modéré (') . round($score) . ')</span>';
+    return '<span class="badge" data-variant="destructive">' . t('Récup. requise (') . round($score) . ')</span>';
 }
 
 function head(string $title, string $active): void {
     $nav = [
-        'dashboard' => ['Tableau de bord', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>'],
-        'activities' => ['Activités', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>'],
-        'calendar' => ['Calendrier', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>'],
-        'power' => ['Courbes de puissance', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>'],
-        'workouts' => ['Entraînements', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h.01M3 12h.01M3 17h.01"/><path d="M8 7h13M8 12h13M8 17h13"/></svg>'],
-        'admin' => ['Administration', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'],
-        'wellness' => ['Wellness & Santé', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>'],
-        'nutrition' => ['Nutrition', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>'],
-        'progress' => ['Progression', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>'],
-        'zones' => ['Zones', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'],
-        'settings' => ['Paramètres', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'],
+        'dashboard' => [t('Tableau de bord'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>'],
+        'activities' => [t('Activités'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>'],
+        'calendar' => [t('Calendrier'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>'],
+        'power' => [t('Courbes de puissance'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>'],
+        'workouts' => [t('Entraînements'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h.01M3 12h.01M3 17h.01"/><path d="M8 7h13M8 12h13M8 17h13"/></svg>'],
+        'admin' => [t('Administration'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'],
+        'wellness' => [t('Wellness & Santé'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>'],
+        'nutrition' => [t('Nutrition'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>'],
+        'progress' => [t('Progression'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>'],
+        'zones' => [t('Zones'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'],
+        'settings' => [t('Paramètres'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'],
     ];
     ?>
 <!doctype html>
-<html lang="fr" class="antialiased">
+<html lang="<?= trq_lang() ?>" class="antialiased">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -333,6 +369,7 @@ tr.lap-flash { animation: lapflash 1.6s ease-out; }
     background: var(--primary); color: var(--primary-foreground);
     font-size: 11px; font-weight: 600;
   }
+  .dock-ava img { width: 100%; height: 100%; border-radius: 999px; object-fit: cover; display: block; }
   #mobileSheet.trq-open { display: block; position: fixed; inset: 0; z-index: 60; }
   body.trq-sheet-open { overflow: hidden; }
   .trq-sheet-bg { position: absolute; inset: 0; background: rgba(0, 0, 0, .5); }
@@ -400,10 +437,10 @@ tr.lap-flash { animation: lapflash 1.6s ease-out; }
 </script>
 <?php
 $groups = [
-    'Analyse'     => ['dashboard', 'activities', 'calendar'],
-    'Performance' => ['power', 'workouts', 'zones', 'progress'],
-    'Santé'       => ['wellness', 'nutrition'],
-    'Compte'      => array_merge(['settings'], (auth_enabled() && is_admin()) ? ['admin'] : []),
+    t('Analyse')     => ['dashboard', 'activities', 'calendar'],
+    t('Performance') => ['power', 'workouts', 'zones', 'progress'],
+    t('Santé')       => ['wellness', 'nutrition'],
+    t('Compte')      => array_merge(['settings'], (auth_enabled() && is_admin()) ? ['admin'] : []),
 ];
 ?>
 <aside id="sidebar" class="sidebar" data-side="left">
@@ -427,10 +464,11 @@ $groups = [
       <?php endforeach; ?>
     </section>
     <footer>
-      <?php $cu = current_user(); $ini = mb_strtoupper(mb_substr(trim((string)($cu['name'] ?? '?')) ?: '?', 0, 1)); ?>
+      <?php $cu = current_user(); $ini = mb_strtoupper(mb_substr(trim((string)($cu['name'] ?? '?')) ?: '?', 0, 1)); $av = avatar_info(); ?>
       <div class="flex items-center gap-2 px-2 py-1">
         <a href="?p=settings" class="flex min-w-0 flex-1 items-center gap-2 -m-1 rounded-md p-1 transition hover:bg-muted" title="Mes paramètres">
-          <span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"><?= h($ini) ?></span>
+          <?php if ($av): ?><img class="size-8 shrink-0 rounded-full object-cover" alt="" src="?p=avatar&v=<?= (int)$av['ts'] ?>"><?php else: ?>
+          <span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"><?= h($ini) ?></span><?php endif; ?>
           <div class="min-w-0 flex-1 leading-tight">
             <p class="truncate text-sm font-medium"><?= h($cu['name'] ?? '') ?></p>
             <p class="truncate text-[11px] text-muted-foreground">FTP <?= h(cfg('ftp', '–')) ?> W<?= cfg('weight') ? ' · ' . h(cfg('weight')) . ' kg' : '' ?></p>
@@ -488,7 +526,7 @@ function foot(): void { ?>
 <?php if (!empty($GLOBALS['trq_nav'])): [$trqNav, $trqGroups, $trqActive] = $GLOBALS['trq_nav']; [$trqCu, $trqIni] = $GLOBALS['trq_user'] ?? ['', '?']; ?>
 <nav id="mobileDock" aria-label="Navigation mobile">
   <a href="?p=settings" class="dock-btn" title="Mes paramètres">
-    <span class="dock-ava"><?= h($trqIni) ?></span>
+    <span class="dock-ava"><?php if (!empty($GLOBALS['trq_user'][0]) && avatar_info()): ?><img alt="" src="?p=avatar&v=<?= (int)avatar_info()['ts'] ?>"><?php else: ?><?= h($trqIni) ?><?php endif; ?></span>
   </a>
   <?php foreach (['dashboard', 'activities', 'calendar', 'progress'] as $trqK): [$trqL, $trqIco] = $trqNav[$trqK]; ?>
   <a href="?p=<?= $trqK ?>" class="dock-btn<?= $trqActive === $trqK ? ' is-active' : '' ?>" aria-label="<?= h($trqL) ?>"<?= $trqActive === $trqK ? ' aria-current="page"' : '' ?>><?= $trqIco ?></a>
@@ -725,7 +763,13 @@ async function deletePlanned(id) {
 }
 async function call(action, extra = {}) {
   const r = await fetch('sync.php', {method: 'POST', body: new URLSearchParams({action, ...extra})});
-  let j; try { j = await r.json(); } catch (e) { throw new Error('Réponse invalide du serveur (HTTP ' + r.status + ').'); }
+  let txt = '';
+  try { txt = await r.text(); } catch (e) {}
+  let j;
+  try { j = JSON.parse(txt); } catch (e) {
+    const frag = txt.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+    throw new Error('Réponse invalide du serveur (HTTP ' + r.status + ')' + (frag ? ' : ' + frag : ' — réponse vide'));
+  }
   if (j.login) { location.href = 'login.php'; throw new Error(j.error); }
   if (!j.ok) throw new Error(j.error);
   return j;
@@ -748,12 +792,18 @@ async function runSync(days = 365, recompute = false) {
             try { await call('sync_wellness', {days: 90}); } catch(e){}
         }
         total = j.remaining || 1;
+        let stall = 0, last = total;
         while (j.remaining > 0) {
             msg.textContent = `Traitement des flux & analyse : ${total - j.remaining} / ${total}`;
             count.textContent = Math.round(((total - j.remaining) / total) * 100) + '%';
+            await new Promise(r => setTimeout(r, 350));
             j = await call('process');
+            stall = j.remaining < last ? 0 : stall + 1;
+            last = j.remaining;
+            if (stall >= 5) throw new Error('des séances résistent au traitement (rate-limit intervals.icu ou données manquantes) — réessaie plus tard ou resynchronise la séance concernée depuis son détail');
         }
-        msg.textContent = 'Synchronisation terminée avec succès !';
+        const tail = !recompute && j.created ? ` — ${j.created} nouvelle${j.created > 1 ? 's' : ''} séance${j.created > 1 ? 's' : ''}` : '';
+        msg.textContent = 'Synchronisation terminée avec succès !' + tail;
         setTimeout(() => location.reload(), 600);
     } catch (e) {
         msg.textContent = 'Erreur : ' + e.message;
@@ -799,7 +849,7 @@ $count = (int)$pdo->query('SELECT COUNT(*) FROM activities')->fetchColumn();
    TABLEAU DE BORD (DASHBOARD)
    ======================================================== */
 if ($p === 'dashboard') {
-    head('Tableau de bord', 'dashboard');
+    head(t('Tableau de bord'), 'dashboard');
     if (!$count) { empty_state(); foot(); exit; }
 
     $sport = in_array($_GET['sport'] ?? '', ['ride', 'run'], true) ? $_GET['sport'] : null;
@@ -895,11 +945,12 @@ if ($p === 'dashboard') {
           <h3 class="text-base font-semibold">PMC Coggan — TSS</h3>
           <p class="text-xs text-muted-foreground">Forme (CTL 42 j), fatigue (ATL 7 j), charge quotidienne, et fraîcheur (TSB) par zones de Coggan</p>
         </div>
-        <div class="flex items-center gap-1" id="pmcRange" role="group" aria-label="Période">
+        <div class="flex items-center gap-1 flex-wrap sm:flex-nowrap" id="pmcRange" role="group" aria-label="Période">
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="90">3 mois</button>
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="180">6 mois</button>
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="365">1 an</button>
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="0">Tout</button>
+          <button type="button" class="btn" data-size="sm" data-variant="outline" onclick="runSync(4000)" title="<?= h(t('Synchroniser tout l\'historique intervals.icu (long la première fois)')) ?>"><?= h(t('Historique complet')) ?></button>
         </div>
       </header>
       <section class="p-4">
@@ -1226,7 +1277,7 @@ if ($p === 'dashboard') {
    ACTIVITÉS (ACTIVITIES LIST)
    ======================================================== */
 if ($p === 'activities') {
-    head('Activités', 'activities');
+    head(t('Activités'), 'activities');
     if (!$count) { empty_state(); foot(); exit; }
 
     $sport = in_array($_GET['sport'] ?? '', ['ride', 'run', 'swim', 'other'], true) ? $_GET['sport'] : null;
@@ -1899,13 +1950,19 @@ if ($p === 'activity') {
           <section class="space-y-4 p-4">
             <?php if ($pc['summary']): ?><p class="text-sm font-medium"><?= h($pc['summary']) ?></p><?php endif; ?>
             <?php if ($pc['note']): ?><p class="text-xs text-muted-foreground"><?= h($pc['note']) ?></p><?php endif; ?>
+            <?php $qDur = $pc['dur']['planned'] > 0 ? $pc['dur']['actual'] / $pc['dur']['planned'] : null;
+                  $qTss = $pc['tss']['planned'] > 0 ? $pc['tss']['actual'] / $pc['tss']['planned'] : null;
+                  $dSub = function ($q, float $lo, float $hi): string {
+                      if ($q === null || ($q >= $lo && $q <= $hi)) return '';
+                      return ' (' . ($q > 1 ? '+' : '−') . round(abs($q - 1) * 100) . '% ' . t('du plan') . ')';
+                  }; ?>
             <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <?php foreach ([['Respect des cibles', $pc['parts']['structure'], $pc['parts']['structure'] === null ? 'non évalué' : 'étape par étape'],
-                              ['Durée', $pc['parts']['duration'], fmt_dur((int)$pc['dur']['planned']) . ' → ' . fmt_dur((int)$pc['dur']['actual'])],
-                              ['Charge (TSS)', $pc['parts']['load'], round($pc['tss']['planned']) . ' → ' . round($pc['tss']['actual'])]] as [$lbl, $val, $sub]): ?>
+                              ['Durée', $pc['parts']['duration'], fmt_dur((int)$pc['dur']['planned']) . ' → ' . fmt_dur((int)$pc['dur']['actual']) . $dSub($qDur, 0.95, 1.10)],
+                              ['Charge (TSS)', $pc['parts']['load'], round($pc['tss']['planned']) . ' → ' . round($pc['tss']['actual']) . $dSub($qTss, 0.9, 1.1)]] as [$lbl, $val, $sub]): ?>
                 <div class="rounded-lg border p-3">
                   <p class="text-[10px] uppercase tracking-wide text-muted-foreground"><?= $lbl ?></p>
-                  <p class="text-xl font-semibold tabular-nums"><?= $pctOf($val) ?></p>
+                  <p class="text-xl font-semibold tabular-nums" style="color:<?= $barCol($val) ?>"><?= $pctOf($val) ?></p>
                   <div class="my-1 h-1.5 overflow-hidden rounded-full bg-muted"><div class="h-full rounded-full" style="width:<?= (int)($val ?? 0) ?>%;background:<?= $barCol($val) ?>"></div></div>
                   <p class="text-[11px] text-muted-foreground tabular-nums"><?= h($sub) ?></p>
                 </div>
@@ -1913,7 +1970,9 @@ if ($p === 'activity') {
               <div class="rounded-lg border p-3">
                 <p class="text-[10px] uppercase tracking-wide text-muted-foreground">Départ</p>
                 <p class="text-xl font-semibold tabular-nums"><?= $pc['chart'] ? ($pc['offset'] >= 0 ? '+' : '−') . fmt_dur(abs((int)$pc['offset'])) : '–' ?></p>
-                <p class="mt-1 text-[11px] text-muted-foreground"><?= $pc['mode'] === 'hr' ? 'décalage détecté (latence FC incluse)' : 'décalage détecté avec le plan' ?></p>
+                <p class="mt-1 text-[11px] text-muted-foreground"><?= $pc['offset'] === 0
+                  ? ($pc['mode'] === 'hr' ? 'départ aligné (latence FC incluse)' : 'départ aligné sur le plan')
+                  : ($pc['mode'] === 'hr' ? 'décalage détecté (latence FC incluse)' : 'décalage détecté avec le plan') ?></p>
               </div>
             </div>
             <?php if ($pc['chart']): ?>
@@ -3646,7 +3705,7 @@ const IS_RUN_PAGE = <?= $isRun ? 'true' : 'false' ?>;
    COURBES DE PUISSANCE WKO5 MULTI-SAISONS (PDC)
    ======================================================== */
 if ($p === 'power') {
-    head('Courbes de puissance', 'power');
+    head(t('Courbes de puissance'), 'power');
     $sport = ($_GET['sport'] ?? 'ride') === 'run' ? 'run' : 'ride';
     $isRun = $sport === 'run';
 
@@ -3855,7 +3914,7 @@ if ($p === 'power') {
    WELLNESS & SANTÉ (HRV, FC REPOS, SOMMEIL)
    ======================================================== */
 if ($p === 'wellness') {
-    head('Wellness & Récupération', 'wellness');
+    head(t('Wellness & Récupération'), 'wellness');
     $summary = get_wellness_summary(60);
     $history = $summary['history'] ?? [];
     $todayRow = end($history) ?: null;
@@ -4083,7 +4142,7 @@ if ($p === 'wellness') {
    CALENDRIER D'ENTRAÎNEMENT STYLE TRAININGPEAKS
    ======================================================== */
 if ($p === 'calendar') {
-    head('Calendrier d’entraînement', 'calendar');
+    head(t('Calendrier d’entraînement'), 'calendar');
 
     $today = date('Y-m-d');
     $mParam = $_GET['m'] ?? date('Y-m');
@@ -4102,8 +4161,8 @@ if ($p === 'calendar') {
     $prevW = (clone $weekStart)->modify('-7 days')->format('Y-m-d');
     $nextW = (clone $weekStart)->modify('+7 days')->format('Y-m-d');
 
-    $calMoisFr = [1 => 'janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
-    $calJoursFr = [1 => 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
+    $calMoisFr = [1 => t('janvier'), t('février'), t('mars'), t('avril'), t('mai'), t('juin'), t('juillet'), t('août'), t('septembre'), t('octobre'), t('novembre'), t('décembre')];
+    $calJoursFr = [1 => t('Lundi'), t('Mardi'), t('Mercredi'), t('Jeudi'), t('Vendredi'), t('Samedi'), t('Dimanche')];
 
     $loadRange = function (string $from, string $to) use ($pdo): array {
         $byDay = [];
@@ -4372,7 +4431,7 @@ if ($p === 'calendar') {
    ======================================================== */
 /* ================= ENTRAÎNEMENTS (Workout Builder) ================= */
 if ($p === 'workouts') {
-    head('Entraînements', 'workouts');
+    head(t('Entraînements'), 'workouts');
     $woId = (int)($_GET['id'] ?? 0); $planId = (int)($_GET['plan'] ?? 0);
     $woData = null; $planDate = null; $notice = '';
     if ($woId) {
@@ -4536,7 +4595,7 @@ if ($p === 'workouts') {
 
 /* ================= ADMINISTRATION (comptes) ================= */
 if ($p === 'admin') {
-    head('Administration', 'admin');
+    head(t('Administration'), 'admin');
     if (!auth_enabled() || !is_admin()) { echo '<div class="alert" data-variant="destructive"><h2>Accès réservé aux administrateurs.</h2></div>'; foot(); exit; }
     $users = auth_users_list(); $regMode = (string)trq_config('registration');
     ?>
@@ -4570,7 +4629,7 @@ if ($p === 'admin') {
 }
 
 if ($p === 'zones') {
-    head('Zones d’entraînement', 'zones');
+    head(t('Zones d’entraînement'), 'zones');
     $lthr = (float)cfg('lthr', 0);
     $runThrPace = (int)cfg('run_thr_pace', 0);
 
@@ -4691,7 +4750,7 @@ if ($p === 'zones') {
    PROGRESSION (RAPPORT HEBDO / EFFICIENCE / RECORDS)
    ======================================================== */
 if ($p === 'progress') {
-    head('Progression', 'progress');
+    head(t('Progression'), 'progress');
     if (!$count) { empty_state(); foot(); exit; }
 
     $wks = array_values(progress_weeks(10));
@@ -4952,7 +5011,7 @@ if ($p === 'progress') {
    PARAMÈTRES (SETTINGS)
    ======================================================== */
 if ($p === 'settings') {
-    head('Paramètres', 'settings');
+    head(t('Paramètres'), 'settings');
     $pt = (int)cfg('run_thr_pace', 0);
     $f = fn($k, $d = '') => h(cfg($k, $d));
     ?>
@@ -4969,11 +5028,22 @@ if ($p === 'settings') {
           <h3 class="text-base font-semibold">Apparence</h3>
           <p class="text-xs text-muted-foreground">Style de l'interface (Basecoat) — appliqué immédiatement, mémorisé sur cet appareil</p>
         </header>
-        <div class="field max-w-56">
-          <label class="text-xs font-medium">Style</label>
-          <select id="styleSel" class="select h-9 text-sm">
-            <?php foreach (['vega', 'nova', 'maia', 'lyra', 'mira', 'luma', 'sera', 'rhea'] as $s) echo '<option value="' . $s . '">' . ucfirst($s) . '</option>'; ?>
-          </select>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div class="field">
+            <label class="text-xs font-medium">Style</label>
+            <select id="styleSel" class="select h-9 text-sm">
+              <?php foreach (['vega', 'nova', 'maia', 'lyra', 'mira', 'luma', 'sera', 'rhea'] as $s) echo '<option value="' . $s . '">' . ucfirst($s) . '</option>'; ?>
+            </select>
+          </div>
+          <form method="post" action="?p=settings" class="field">
+            <label class="text-xs font-medium" for="langSel">Langue / Language</label>
+            <select id="langSel" name="lang" class="select h-9 text-sm" onchange="this.form.submit()">
+              <?php foreach (trq_langs() as $trqLc => $trqLn): ?>
+              <option value="<?= $trqLc ?>"<?= trq_lang() === $trqLc ? ' selected' : '' ?>><?= htmlspecialchars($trqLn, ENT_QUOTES, 'UTF-8') ?></option>
+              <?php endforeach; ?>
+            </select>
+            <noscript><button class="btn mt-2" data-size="sm" type="submit">OK</button></noscript>
+          </form>
         </div>
       </div>
 
@@ -4988,6 +5058,10 @@ if ($p === 'settings') {
         <div class="alert"><h3>Bienvenue sur TRQ 👋</h3><p class="text-xs text-muted-foreground">Pour commencer : renseignez votre clé API intervals.icu et vos seuils ci-dessous, enregistrez, puis lancez « Synchroniser ». Vous pouvez aussi générer des données de démonstration depuis le tableau de bord.</p></div>
       <?php endif; ?>
 
+      <?php if (isset($_GET['err'])): ?>
+        <div class="alert" data-variant="destructive"><h2><?= h((string)$_GET['err']) ?></h2></div>
+      <?php endif; ?>
+
       <?php if (auth_enabled()): $cu = current_user(); ?>
       <div class="card p-6 space-y-4">
         <header class="flex items-start justify-between gap-3">
@@ -4995,6 +5069,18 @@ if ($p === 'settings') {
             <p class="text-xs text-muted-foreground"><?= h($cu['name']) ?> · <?= h($cu['email']) ?> · <?= $cu['role'] === 'admin' ? 'administrateur' : 'utilisateur' ?></p></div>
           <form method="post" action="login.php?a=logout"><button class="btn" data-variant="outline" data-size="sm" type="submit">Se déconnecter</button></form>
         </header>
+        <form method="post" enctype="multipart/form-data" action="?p=settings" class="flex flex-wrap items-center gap-3">
+          <input type="hidden" name="avatar_post" value="1">
+          <?php $av = avatar_info(); ?>
+          <?php if ($av): ?><img class="size-12 rounded-full object-cover border" alt="" src="?p=avatar&v=<?= (int)$av['ts'] ?>"><?php else: ?><span class="flex size-12 shrink-0 items-center justify-center rounded-full bg-primary text-lg font-semibold text-primary-foreground"><?= h(mb_strtoupper(mb_substr(trim((string)$cu['name']) ?: '?', 0, 1))) ?></span><?php endif; ?>
+          <div class="min-w-0">
+            <p class="text-sm font-medium">Photo de profil</p>
+            <p class="text-xs text-muted-foreground">JPEG, PNG, WebP ou GIF · 4 Mo max · recadrée en carré 256px si possible</p>
+          </div>
+          <input class="input h-9 w-auto max-w-full text-sm" type="file" name="avatar_file" accept="image/jpeg,image/png,image/webp,image/gif">
+          <button class="btn" data-size="sm" type="submit">Enregistrer la photo</button>
+          <?php if ($av): ?><button class="btn" data-variant="ghost" data-size="sm" type="submit" name="avatar_remove" value="1">Supprimer</button><?php endif; ?>
+        </form>
         <div class="grid gap-3 sm:grid-cols-3">
           <div class="field"><label class="text-xs font-medium">Mot de passe actuel</label><input class="input text-sm" type="password" id="pwCur" autocomplete="current-password"></div>
           <div class="field"><label class="text-xs font-medium">Nouveau mot de passe</label><input class="input text-sm" type="password" id="pwNew" autocomplete="new-password"></div>
@@ -5147,7 +5233,7 @@ if ($p === 'settings') {
    PAGE NUTRITION — cibles issues du statement UCI 2026
    ======================================================== */
 if ($p === 'nutrition') {
-    head('Nutrition', 'nutrition');
+    head(t('Nutrition'), 'nutrition');
     $kg = nutrition_weight();
     $bfRaw = cfg('body_fat');
     $bf = ($bfRaw !== null && (float)$bfRaw > 0) ? (float)$bfRaw : null;
@@ -5319,7 +5405,7 @@ if ($p === 'nutrition') {
 }
 
 http_response_code(404);
-head('Page introuvable', '');
+head(t('Page introuvable'), '');
 echo '<div class="card p-8 text-center max-w-md mx-auto my-12">';
 echo '<h2 class="text-xl font-bold">Page introuvable</h2>';
 echo '<p class="text-sm text-muted-foreground mt-2 mb-4">La page demandée n’existe pas.</p>';
