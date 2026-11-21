@@ -56,7 +56,8 @@ try {
         // 2. Traitement des flux 1 Hz et analyse des activités (par lot de 6)
         $rows = $pdo->query('SELECT * FROM activities WHERE synced=0 ORDER BY date DESC LIMIT 6')->fetchAll();
         foreach ($rows as $r) {
-            process_activity($r);
+            try { process_activity($r); }
+            catch (Throwable $e) { error_log('process_activity: ' . $e->getMessage() . ' @ ' . basename($e->getFile()) . ':' . $e->getLine()); }
         }
         $rem = (int)$pdo->query('SELECT COUNT(*) FROM activities WHERE synced=0')->fetchColumn();
         echo json_encode(['ok' => true, 'remaining' => $rem]);
