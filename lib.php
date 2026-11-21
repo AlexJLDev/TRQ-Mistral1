@@ -1241,7 +1241,10 @@ function process_activity(array $row): void {
             $S[$s['type']] = $s['data'];
         }
         if ($S) { $S['gps_checked'] = 1; $blob = gzcompress(json_encode($S), 6); }
-    } catch (Throwable $e) { }
+    } catch (Throwable $e) {
+        error_log('process_activity streams ' . $row['id'] . ' : ' . $e->getMessage());
+        throw $e;
+    }
 }
     $m = analyze($row, $S);
 
