@@ -322,13 +322,46 @@ tr.lap-flash { animation: lapflash 1.6s ease-out; }
   .dock-btn {
     display: flex; align-items: center; justify-content: center;
     width: 2.6rem; height: 2.6rem; border-radius: 999px;
-    color: var(--foreground); transition: background .15s;
+    color: var(--foreground); transition: background .15s; cursor: pointer;
   }
   .dock-btn:hover { background: var(--muted); }
   .dock-btn.is-active { background: var(--primary); color: var(--primary-foreground); }
-  .dock-btn.is-active svg { stroke: currentColor; }
+  .dock-btn svg { width: 18px; height: 18px; }
+  .dock-ava {
+    width: 2rem; height: 2rem; border-radius: 999px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--primary); color: var(--primary-foreground);
+    font-size: 11px; font-weight: 600;
+  }
   #mobileSheet.trq-open { display: block; position: fixed; inset: 0; z-index: 60; }
-  #mobileSheet.trq-open > div:last-child { animation: trqSheetUp .18s ease-out; }
+  body.trq-sheet-open { overflow: hidden; }
+  .trq-sheet-bg { position: absolute; inset: 0; background: rgba(0, 0, 0, .5); }
+  .trq-sheet-panel {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    max-height: 78vh; overflow-y: auto;
+    background: var(--card); border: 1px solid var(--border); border-bottom: 0;
+    border-radius: calc(var(--radius) + 8px) calc(var(--radius) + 8px) 0 0;
+    padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom));
+    box-shadow: 0 -8px 30px rgba(0, 0, 0, .2);
+    animation: trqSheetUp .2s ease-out;
+  }
+  .trq-sheet-handle {
+    width: 2.5rem; height: .25rem; border-radius: 999px; margin: 0 auto .75rem;
+    background: color-mix(in oklab, var(--muted-foreground) 30%, transparent); cursor: pointer;
+  }
+  .trq-sheet-group { margin-bottom: .875rem; }
+  .trq-sheet-group-label {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--muted-foreground); margin: 0 0 .375rem .25rem;
+  }
+  .trq-sheet-item {
+    display: flex; align-items: center; gap: .75rem;
+    border-radius: calc(var(--radius) - 2px); padding: .625rem .75rem;
+    font-size: .875rem; font-weight: 500; color: var(--foreground);
+  }
+  .trq-sheet-item:hover { background: var(--muted); }
+  .trq-sheet-item[aria-current="page"] { background: var(--primary); color: var(--primary-foreground); }
+  .trq-sheet-item svg { width: 16px; height: 16px; flex: none; }
   @keyframes trqSheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
 }
 </style>
@@ -414,47 +447,7 @@ $groups = [
     </footer>
   </nav>
 </aside>
-
-<?php $dockKeys = ['dashboard', 'activities', 'calendar', 'progress']; ?>
-<nav id="mobileDock" aria-label="Navigation mobile">
-  <a href="?p=settings" class="dock-btn" title="Mes paramètres">
-    <span class="flex size-8 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"><?= h($ini) ?></span>
-  </a>
-  <?php foreach ($dockKeys as $k): [$l, $ico] = $nav[$k]; ?>
-  <a href="?p=<?= $k ?>" class="dock-btn<?= $active === $k ? ' is-active' : '' ?>" aria-label="<?= h($l) ?>"<?= $active === $k ? ' aria-current="page"' : '' ?>><?= $ico ?></a>
-  <?php endforeach; ?>
-  <button type="button" class="dock-btn" aria-label="Toutes les pages" onclick="trqSheet(true)">
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
-  </button>
-</nav>
-
-<div id="mobileSheet" role="dialog" aria-modal="true" aria-label="Toutes les pages">
-  <div class="absolute inset-0 bg-black/50" onclick="trqSheet(false)"></div>
-  <div class="absolute inset-x-0 bottom-0 max-h-[78vh] overflow-y-auto rounded-t-2xl border bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-xl">
-    <div class="mx-auto mb-3 h-1 w-10 rounded-full bg-muted-foreground/30" data-sheet-close onclick="trqSheet(false)"></div>
-    <?php foreach ($groups as $label => $keys): ?>
-    <div class="mb-4 last:mb-0">
-      <h3 class="mb-1.5 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"><?= h($label) ?></h3>
-      <ul class="space-y-0.5">
-        <?php foreach ($keys as $k): [$l, $ico] = $nav[$k]; ?>
-        <li><a href="?p=<?= $k ?>" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium <?= $active === $k ? 'bg-primary text-primary-foreground' : 'hover:bg-muted' ?>"<?= $active === $k ? ' aria-current="page"' : '' ?>><?= $ico ?><span><?= $l ?></span></a></li>
-        <?php endforeach; ?>
-      </ul>
-    </div>
-    <?php endforeach; ?>
-    <?php if (auth_enabled()): ?>
-    <form method="post" action="login.php?a=logout" class="mt-4 border-t pt-3">
-      <button type="submit" class="btn w-full" data-variant="outline">Se déconnecter</button>
-    </form>
-    <?php endif; ?>
-  </div>
-</div>
-<script>
-function trqSheet(open) {
-  document.getElementById('mobileSheet').classList.toggle('trq-open', !!open);
-}
-document.addEventListener('keydown', e => { if (e.key === 'Escape') trqSheet(false); });
-</script>
+<?php $GLOBALS['trq_nav'] = [$nav, $groups, $active]; $GLOBALS['trq_user'] = [$cu, $ini] ?? ['', '?']; ?>
 
 <main>
   <header class="sticky top-0 z-20 flex h-14 items-center gap-2 border-b bg-background px-4">
@@ -491,6 +484,49 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') trqSheet(fal
 function foot(): void { ?>
   </div>
 </main>
+
+<?php if (!empty($GLOBALS['trq_nav'])): [$trqNav, $trqGroups, $trqActive] = $GLOBALS['trq_nav']; [$trqCu, $trqIni] = $GLOBALS['trq_user'] ?? ['', '?']; ?>
+<nav id="mobileDock" aria-label="Navigation mobile">
+  <a href="?p=settings" class="dock-btn" title="Mes paramètres">
+    <span class="dock-ava"><?= h($trqIni) ?></span>
+  </a>
+  <?php foreach (['dashboard', 'activities', 'calendar', 'progress'] as $trqK): [$trqL, $trqIco] = $trqNav[$trqK]; ?>
+  <a href="?p=<?= $trqK ?>" class="dock-btn<?= $trqActive === $trqK ? ' is-active' : '' ?>" aria-label="<?= h($trqL) ?>"<?= $trqActive === $trqK ? ' aria-current="page"' : '' ?>><?= $trqIco ?></a>
+  <?php endforeach; ?>
+  <button type="button" class="dock-btn" aria-label="Toutes les pages" onclick="trqSheet(true)">
+    <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+  </button>
+</nav>
+
+<div id="mobileSheet" role="dialog" aria-modal="true" aria-label="Toutes les pages">
+  <div class="trq-sheet-bg" onclick="trqSheet(false)"></div>
+  <div class="trq-sheet-panel">
+    <div class="trq-sheet-handle" onclick="trqSheet(false)"></div>
+    <?php foreach ($trqGroups as $trqLabel => $trqKeys): ?>
+    <div class="trq-sheet-group">
+      <h3 class="trq-sheet-group-label"><?= h($trqLabel) ?></h3>
+      <ul>
+        <?php foreach ($trqKeys as $trqK): [$trqL, $trqIco] = $trqNav[$trqK]; ?>
+        <li><a href="?p=<?= $trqK ?>" class="trq-sheet-item"<?= $trqActive === $trqK ? ' aria-current="page"' : '' ?>><?= $trqIco ?><span><?= $trqL ?></span></a></li>
+        <?php endforeach; ?>
+      </ul>
+    </div>
+    <?php endforeach; ?>
+    <?php if (auth_enabled()): ?>
+    <form method="post" action="login.php?a=logout" class="mt-4 border-t pt-3">
+      <button type="submit" class="btn w-full" data-variant="outline">Se déconnecter</button>
+    </form>
+    <?php endif; ?>
+  </div>
+</div>
+<script>
+function trqSheet(open) {
+  document.getElementById('mobileSheet').classList.toggle('trq-open', !!open);
+  document.body.classList.toggle('trq-sheet-open', !!open);
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') trqSheet(false); });
+</script>
+<?php endif; ?>
 
 <!-- Modales Universelles (Positionnées à la racine du document) -->
 
