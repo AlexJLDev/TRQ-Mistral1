@@ -1080,9 +1080,11 @@ function gps_for_activity(string $id): ?array {
             $ll = $len > 1 ? demo_route($len, $id) : [];
         } else {
             $ll = [];
-            foreach (icu_get('/activity/' . $id . '/streams.json', ['types' => 'latlng']) ?: [] as $s) {
-                if (($s['type'] ?? '') === 'latlng') $ll = normalize_latlng($s);
-            }
+            try {
+                foreach (icu_get('/activity/' . $id . '/streams.json', ['types' => 'latlng']) ?: [] as $s) {
+                    if (($s['type'] ?? '') === 'latlng') $ll = normalize_latlng($s);
+                }
+            } catch (Throwable $e) { error_log('gps_for_activity ' . $id . ' : ' . $e->getMessage()); }
         }
         $S['latlng'] = $ll; $S['gps_checked'] = 1;
         db()->prepare('UPDATE activities SET streams=? WHERE id=?')->execute([gzcompress(json_encode($S), 6), $id]);
@@ -1222,8 +1224,8 @@ function process_activity(array $row): void {
     // Backfill : les anciens blobs n'ont pas grade/temp
     if (!array_key_exists('grade', $S) || !array_key_exists('temp', $S)) {
         try {
-            foreach (icu_get('/activity/' . $row['id'] . '/streams.json', ['types' => 'grade,temp']) ?: [] as $s) {
-                if (!empty($s['data'])) $S[$s['type']] = $s['data'];
+            foreach (icu_get('/activity/' . $row['id'] . '/streams.json', ['types' => 'grade_smooth,temp']) ?: [] as $s) {
+                if (!empty($s['data'])) $S[(($s['type'] ?? '') === 'grade_smooth') ? 'grade' : ($s['type'] ?? '')] = $s['data'];
             }
             $blob = gzcompress(json_encode($S), 6);
         } catch (Throwable $e) { }
@@ -1233,12 +1235,21 @@ function process_activity(array $row): void {
        $blob et $S restent vides et l'UPDATE écrase la séance avec des valeurs nulles. */
     $blob = null;
     try {
-        $raw = icu_get('/activity/' . $row['id'] . '/streams.json',
-            ['types' => 'time,watts,heartrate,velocity_smooth,cadence,altitude,distance,grade,temp,latlng']);
-        foreach ($raw as $s) {
+        $types = ['time', 'watts', 'heartrate', 'velocity_smooth', 'cadence', 'altitude', 'distance', 'grade_smooth', 'temp', 'latlng'];
+        $raw = null;
+        $tries = 0;
+        while ($types && $tries++ < 6) {
+            try { $raw = icu_get('/activity/' . $row['id'] . '/streams.json', ['types' => implode(',', $types)]); break; }
+            catch (Throwable $e) {
+                if (!preg_match('/Invalid stream type \[([a-zA-Z_]+)\]/', (string)$e->getMessage(), $mm) || !in_array($mm[1], $types, true)) throw $e;
+                $types = array_values(array_diff($types, [$mm[1]]));
+            }
+        }
+        foreach ((array)$raw as $s) {
             if (empty($s['data'])) continue;
-            if (($s['type'] ?? '') === 'latlng') { $ll = normalize_latlng($s); if ($ll) $S['latlng'] = $ll; continue; }
-            $S[$s['type']] = $s['data'];
+            $st = (string)($s['type'] ?? '');
+            if ($st === 'latlng') { $ll = normalize_latlng($s); if ($ll) $S['latlng'] = $ll; continue; }
+            $S[$st === 'grade_smooth' ? 'grade' : $st] = $s['data'];
         }
         if ($S) { $S['gps_checked'] = 1; $blob = gzcompress(json_encode($S), 6); }
     } catch (Throwable $e) {
