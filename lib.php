@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/auth_lib.php';
+require_once __DIR__ . '/lang.php';
 require_once __DIR__ . '/diagnostic.php';
 require_once __DIR__ . '/plan_compare.php';
 require_once __DIR__ . '/nutrition_lib.php';
@@ -1702,3 +1703,6 @@ function fmt_dur_full(int $s): string {
 function fmt_label(int $s): string {
     return $s < 60 ? "{$s}s" : ($s < 3600 ? intdiv($s, 60) . 'min' : round($s / 3600, 1) . 'h');
 }
+
+/* ---------- i18n : filtre de sortie traduit le HTML des pages (index, login) ---------- */
+ob_start('trq_translate_html');
