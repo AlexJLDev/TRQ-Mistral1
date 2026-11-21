@@ -42,6 +42,9 @@ function auth_db(): PDO {
         CREATE TABLE IF NOT EXISTS auth_events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, ip TEXT, email TEXT, at INTEGER);
         CREATE INDEX IF NOT EXISTS idx_auth_events ON auth_events(kind, at);
         CREATE TABLE IF NOT EXISTS password_resets(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, token_hash TEXT UNIQUE, expires_at INTEGER, used INTEGER DEFAULT 0);");
+        foreach (['ALTER TABLE users ADD COLUMN avatar BLOB', 'ALTER TABLE users ADD COLUMN avatar_mime TEXT', 'ALTER TABLE users ADD COLUMN avatar_ts INTEGER'] as $m) {
+            try { $p->exec($m); } catch (\Throwable $e) { }
+        }
     }
     return $p;
 }
