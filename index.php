@@ -162,7 +162,7 @@ function head(string $title, string $active): void {
         'dashboard' => ['Tableau de bord', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>'],
         'activities' => ['Activités', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>'],
         'calendar' => ['Calendrier', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>'],
-        'power' => ['Courbes WKO5', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>'],
+        'power' => ['Courbes de puissance', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>'],
         'workouts' => ['Entraînements', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h.01M3 12h.01M3 17h.01"/><path d="M8 7h13M8 12h13M8 17h13"/></svg>'],
         'admin' => ['Administration', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'],
         'wellness' => ['Wellness & Santé', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>'],
@@ -630,7 +630,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') trqSheet(fal
     <header class="flex items-center justify-between pb-3 border-b mb-4">
       <div>
         <h3 class="text-base font-semibold">Planifier ou consigner une séance</h3>
-        <p class="text-xs text-muted-foreground">Calendrier d'entraînement style TrainingPeaks</p>
+        <p class="text-xs text-muted-foreground">Calendrier d'entraînement</p>
       </div>
       <button type="button" class="btn" data-variant="ghost" data-size="icon" onclick="this.closest('dialog').close()">✕</button>
     </header>
@@ -778,7 +778,7 @@ function empty_state(): void { ?>
       </div>
       <h3 class="text-xl font-bold tracking-tight">Aucune activité enregistrée</h3>
       <p class="text-sm text-muted-foreground mt-2 mb-6">
-        Vous pouvez synchroniser votre compte intervals.icu ou générer un jeu de données de démonstration complet pour tester immédiatement toutes les fonctionnalités (intervalles, WKO5, wellness, calendrier TrainingPeaks).
+        Vous pouvez synchroniser votre compte intervals.icu ou générer un jeu de données de démonstration complet pour tester immédiatement toutes les fonctionnalités (intervalles, métriques avancées, wellness, calendrier).
       </p>
       <div class="flex items-center justify-center gap-3 flex-wrap">
         <button class="btn" onclick="call('seed_demo').then(()=>location.reload())">
@@ -845,7 +845,7 @@ if ($p === 'dashboard') {
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
       <div>
         <h1 class="text-2xl font-bold tracking-tight">Tableau de bord de performance</h1>
-        <p class="text-sm text-muted-foreground">Charge d'entraînement PMC, fatigue, fraîcheur et profil WKO5</p>
+        <p class="text-sm text-muted-foreground">Charge d'entraînement PMC, fatigue, fraîcheur et profil de performance</p>
       </div>
       <div class="flex items-center gap-1.5 bg-muted p-1 rounded-lg">
         <?php foreach ([null => 'Tous', 'ride' => 'Vélo', 'run' => 'Course'] as $k => $l): ?>
@@ -1951,7 +1951,7 @@ if ($p === 'activity') {
       <div class="card">
         <header class="p-4 border-b flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div>
-            <h3 class="text-base font-semibold">Télémétrie 1 Hz & Profil de l'effort (TrainingPeaks / WKO5)</h3>
+            <h3 class="text-base font-semibold">Télémétrie 1 Hz & Profil de l'effort</h3>
             <p class="text-xs text-muted-foreground">Graphique unique ou empilé · glissez sur un graphique pour sélectionner une portion et créer un tour</p>
           </div>
 
@@ -2179,7 +2179,7 @@ if ($p === 'activity') {
         <div class="card">
           <header class="p-4 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
-              <h3 class="text-base font-semibold">Tableau détaillé des tours & intervalles (WKO5 Interval Engine)</h3>
+              <h3 class="text-base font-semibold">Tableau détaillé des tours & intervalles</h3>
               <p class="text-xs text-muted-foreground">Statistiques par bloc : puissance normalisée, intensité, réserve W'bal et allures</p>
             </div>
             <div class="flex items-center gap-2">
@@ -2252,7 +2252,7 @@ if ($p === 'activity') {
         <div class="card p-4 space-y-3">
           <div class="text-xs font-bold uppercase tracking-wider text-cyan-600 dark:text-cyan-400 flex items-center justify-between">
             <span>⚡ Puissance & Anaérobie</span>
-            <span>WKO5</span>
+            <span>1 Hz</span>
           </div>
           <div class="space-y-2 text-xs">
             <div class="flex justify-between">
@@ -2583,7 +2583,7 @@ if ($p === 'activity') {
       <div class="grid lg:grid-cols-2 gap-6">
         <div class="card">
           <header class="p-4 border-b">
-            <h3 class="text-base font-semibold">MMP de la séance vs Record 90 jours (WKO5)</h3>
+            <h3 class="text-base font-semibold">MMP de la séance vs Record 90 jours</h3>
             <p class="text-xs text-muted-foreground">Comparaison de vos meilleurs efforts de la séance face à votre enveloppe de saison</p>
           </header>
           <section class="p-4">
@@ -3583,7 +3583,7 @@ const IS_RUN_PAGE = <?= $isRun ? 'true' : 'false' ?>;
    COURBES DE PUISSANCE WKO5 MULTI-SAISONS (PDC)
    ======================================================== */
 if ($p === 'power') {
-    head('Courbes de puissance WKO5', 'power');
+    head('Courbes de puissance', 'power');
     $sport = ($_GET['sport'] ?? 'ride') === 'run' ? 'run' : 'ride';
     $isRun = $sport === 'run';
 
@@ -3604,7 +3604,7 @@ if ($p === 'power') {
     <div class="space-y-6">
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 class="text-2xl font-bold tracking-tight">Courbes de puissance WKO5 & Comparaison</h1>
+          <h1 class="text-2xl font-bold tracking-tight">Courbes de puissance & Comparaison</h1>
           <p class="text-sm text-muted-foreground">Power Duration Curve (PDC), modèle Critical Power (CP/W') et comparaison inter-saisons</p>
         </div>
         <div class="flex items-center gap-1 bg-muted p-1 rounded-lg">
@@ -3649,7 +3649,7 @@ if ($p === 'power') {
         <?php
         if ($m1 && !$isRun) {
             $diffCp = $m2 ? $m1['cp'] - $m2['cp'] : 0;
-            stat_card('Puissance Critique (CP)', n($m1['cp']) . ' W', $m2 ? 'Diff. : <span class="' . ($diffCp >= 0 ? 'text-emerald-500 font-bold' : 'text-red-500 font-bold') . '">' . sprintf('%+d W', $diffCp) . '</span>' : 'Modèle WKO5');
+            stat_card('Puissance Critique (CP)', n($m1['cp']) . ' W', $m2 ? 'Diff. : <span class="' . ($diffCp >= 0 ? 'text-emerald-500 font-bold' : 'text-red-500 font-bold') . '">' . sprintf('%+d W', $diffCp) . '</span>' : 'Modèle CP');
             stat_card("W' (Capacité anaérobie)", n($m1['wp'] / 1000, 1) . ' kJ', $m2 ? 'Pér. B : ' . n($m2['wp'] / 1000, 1) . ' kJ' : '');
             stat_card('eFTP estimé', n($m1['eftp']) . ' W', $weight ? n($m1['eftp'] / $weight, 2) . ' W/kg' : '');
             stat_card('Pmax (Sprint 5s)', n($m1['pmax']) . ' W', $m2 ? 'Pér. B : ' . n($m2['pmax']) . ' W' : '');
