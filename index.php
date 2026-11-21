@@ -7,8 +7,37 @@ ob_start('csrf_inject_cb');                  // ajoute le jeton CSRF à tous les
 $p = $_GET['p'] ?? 'dashboard';
 $pdo = db();
 
+/* ---------- Photo de profil servie depuis auth.sqlite ---------- */
+if ($p === 'avatar') {
+    $st = auth_db()->prepare('SELECT avatar, avatar_mime FROM users WHERE id=?');
+    $st->execute([current_uid()]);
+    $row = $st->fetch();
+    $blob = $row && $row['avatar'] !== null ? (is_resource($row['avatar']) ? stream_get_contents($row['avatar']) : (string)$row['avatar']) : null;
+    if ($blob === null || $blob === '') { http_response_code(404); exit; }
+    header('Content-Type: ' . ($row['avatar_mime'] ?: 'application/octet-stream'));
+    header('Content-Length: ' . strlen($blob));
+    header('Cache-Control: private, max-age=86400');
+    echo $blob;
+    exit;
+}
+
 /* ---------- Paramètres POST ---------- */
 if ($p === 'settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    /* Photo de profil : mini-formulaire dédié (upload ou suppression) */
+    if (array_key_exists('avatar_post', $_POST)) {
+        try {
+            if (array_key_exists('avatar_remove', $_POST)) {
+                auth_db()->prepare('UPDATE users SET avatar=NULL, avatar_mime=NULL, avatar_ts=NULL WHERE id=?')->execute([current_uid()]);
+            } else {
+                [$blob, $mime] = avatar_process($_FILES['avatar_file'] ?? []);
+                auth_db()->prepare('UPDATE users SET avatar=?, avatar_mime=?, avatar_ts=? WHERE id=?')->execute([$blob, $mime, time(), current_uid()]);
+            }
+            header('Location: ?p=settings&saved=1');
+        } catch (RuntimeException $e) {
+            header('Location: ?p=settings&err=' . urlencode($e->getMessage()));
+        }
+        exit;
+    }
     /* Sélecteur de langue : mini-formulaire dédié (ne touche pas aux autres réglages) */
     if (array_key_exists('lang', $_POST) && !array_key_exists('api_key', $_POST)) {
         $lang = trim($_POST['lang']);
@@ -340,6 +369,7 @@ tr.lap-flash { animation: lapflash 1.6s ease-out; }
     background: var(--primary); color: var(--primary-foreground);
     font-size: 11px; font-weight: 600;
   }
+  .dock-ava img { width: 100%; height: 100%; border-radius: 999px; object-fit: cover; display: block; }
   #mobileSheet.trq-open { display: block; position: fixed; inset: 0; z-index: 60; }
   body.trq-sheet-open { overflow: hidden; }
   .trq-sheet-bg { position: absolute; inset: 0; background: rgba(0, 0, 0, .5); }
@@ -434,10 +464,11 @@ $groups = [
       <?php endforeach; ?>
     </section>
     <footer>
-      <?php $cu = current_user(); $ini = mb_strtoupper(mb_substr(trim((string)($cu['name'] ?? '?')) ?: '?', 0, 1)); ?>
+      <?php $cu = current_user(); $ini = mb_strtoupper(mb_substr(trim((string)($cu['name'] ?? '?')) ?: '?', 0, 1)); $av = avatar_info(); ?>
       <div class="flex items-center gap-2 px-2 py-1">
         <a href="?p=settings" class="flex min-w-0 flex-1 items-center gap-2 -m-1 rounded-md p-1 transition hover:bg-muted" title="Mes paramètres">
-          <span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"><?= h($ini) ?></span>
+          <?php if ($av): ?><img class="size-8 shrink-0 rounded-full object-cover" alt="" src="?p=avatar&v=<?= (int)$av['ts'] ?>"><?php else: ?>
+          <span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"><?= h($ini) ?></span><?php endif; ?>
           <div class="min-w-0 flex-1 leading-tight">
             <p class="truncate text-sm font-medium"><?= h($cu['name'] ?? '') ?></p>
             <p class="truncate text-[11px] text-muted-foreground">FTP <?= h(cfg('ftp', '–')) ?> W<?= cfg('weight') ? ' · ' . h(cfg('weight')) . ' kg' : '' ?></p>
@@ -495,7 +526,7 @@ function foot(): void { ?>
 <?php if (!empty($GLOBALS['trq_nav'])): [$trqNav, $trqGroups, $trqActive] = $GLOBALS['trq_nav']; [$trqCu, $trqIni] = $GLOBALS['trq_user'] ?? ['', '?']; ?>
 <nav id="mobileDock" aria-label="Navigation mobile">
   <a href="?p=settings" class="dock-btn" title="Mes paramètres">
-    <span class="dock-ava"><?= h($trqIni) ?></span>
+    <span class="dock-ava"><?php if (!empty($GLOBALS['trq_user'][0]) && avatar_info()): ?><img alt="" src="?p=avatar&v=<?= (int)avatar_info()['ts'] ?>"><?php else: ?><?= h($trqIni) ?><?php endif; ?></span>
   </a>
   <?php foreach (['dashboard', 'activities', 'calendar', 'progress'] as $trqK): [$trqL, $trqIco] = $trqNav[$trqK]; ?>
   <a href="?p=<?= $trqK ?>" class="dock-btn<?= $trqActive === $trqK ? ' is-active' : '' ?>" aria-label="<?= h($trqL) ?>"<?= $trqActive === $trqK ? ' aria-current="page"' : '' ?>><?= $trqIco ?></a>
@@ -5014,6 +5045,10 @@ if ($p === 'settings') {
         <div class="alert"><h3>Bienvenue sur TRQ 👋</h3><p class="text-xs text-muted-foreground">Pour commencer : renseignez votre clé API intervals.icu et vos seuils ci-dessous, enregistrez, puis lancez « Synchroniser ». Vous pouvez aussi générer des données de démonstration depuis le tableau de bord.</p></div>
       <?php endif; ?>
 
+      <?php if (isset($_GET['err'])): ?>
+        <div class="alert" data-variant="destructive"><h2><?= h((string)$_GET['err']) ?></h2></div>
+      <?php endif; ?>
+
       <?php if (auth_enabled()): $cu = current_user(); ?>
       <div class="card p-6 space-y-4">
         <header class="flex items-start justify-between gap-3">
@@ -5021,6 +5056,18 @@ if ($p === 'settings') {
             <p class="text-xs text-muted-foreground"><?= h($cu['name']) ?> · <?= h($cu['email']) ?> · <?= $cu['role'] === 'admin' ? 'administrateur' : 'utilisateur' ?></p></div>
           <form method="post" action="login.php?a=logout"><button class="btn" data-variant="outline" data-size="sm" type="submit">Se déconnecter</button></form>
         </header>
+        <form method="post" enctype="multipart/form-data" action="?p=settings" class="flex flex-wrap items-center gap-3">
+          <input type="hidden" name="avatar_post" value="1">
+          <?php $av = avatar_info(); ?>
+          <?php if ($av): ?><img class="size-12 rounded-full object-cover border" alt="" src="?p=avatar&v=<?= (int)$av['ts'] ?>"><?php else: ?><span class="flex size-12 shrink-0 items-center justify-center rounded-full bg-primary text-lg font-semibold text-primary-foreground"><?= h(mb_strtoupper(mb_substr(trim((string)$cu['name']) ?: '?', 0, 1))) ?></span><?php endif; ?>
+          <div class="min-w-0">
+            <p class="text-sm font-medium">Photo de profil</p>
+            <p class="text-xs text-muted-foreground">JPEG, PNG, WebP ou GIF · 4 Mo max · recadrée en carré 256px si possible</p>
+          </div>
+          <input class="input h-9 w-auto max-w-full text-sm" type="file" name="avatar_file" accept="image/jpeg,image/png,image/webp,image/gif">
+          <button class="btn" data-size="sm" type="submit">Enregistrer la photo</button>
+          <?php if ($av): ?><button class="btn" data-variant="ghost" data-size="sm" type="submit" name="avatar_remove" value="1">Supprimer</button><?php endif; ?>
+        </form>
         <div class="grid gap-3 sm:grid-cols-3">
           <div class="field"><label class="text-xs font-medium">Mot de passe actuel</label><input class="input text-sm" type="password" id="pwCur" autocomplete="current-password"></div>
           <div class="field"><label class="text-xs font-medium">Nouveau mot de passe</label><input class="input text-sm" type="password" id="pwNew" autocomplete="new-password"></div>

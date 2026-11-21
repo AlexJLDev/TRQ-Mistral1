@@ -1047,6 +1047,12 @@ function trq_i18n(): array {
     'départ aligné (latence FC incluse)' => 'start aligned (HR lag included)',
     'départ aligné sur le plan' => 'start aligned with plan',
     'du plan' => 'of plan',
+    'Photo de profil' => 'Profile photo',
+    'JPEG, PNG, WebP ou GIF · 4 Mo max · recadrée en carré 256px si possible' => 'JPEG, PNG, WebP or GIF · 4 MB max · cropped to a 256px square when possible',
+    'Enregistrer la photo' => 'Save photo',
+    'Envoi du fichier impossible (trop gros ou requête interrompue).' => 'File upload failed (too large or interrupted request).',
+    'Image trop lourde (4 Mo max).' => 'Image too large (4 MB max).',
+    'Fichier non reconnu comme une image (JPEG, PNG, WebP ou GIF).' => 'File not recognized as an image (JPEG, PNG, WebP or GIF).',
     ];
     return $d;
 }
