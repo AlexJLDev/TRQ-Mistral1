@@ -305,6 +305,32 @@ tr.lap-flash { animation: lapflash 1.6s ease-out; }
 #bootSkeleton .skeleton { background: var(--muted); }
 .trq-pulse { animation: trqPulse 1.6s ease-in-out infinite; }
 @keyframes trqPulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+
+/* Navigation mobile : dock flottant en bas (la sidebar reste réservée au desktop) */
+#mobileDock, #mobileSheet { display: none; }
+@media (max-width: 767.98px) {
+  #sidebar, #sidebarToggle { display: none !important; }
+  main { padding-bottom: calc(5.5rem + env(safe-area-inset-bottom)); }
+  #mobileDock {
+    display: flex; align-items: center; gap: .25rem;
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(.75rem + env(safe-area-inset-bottom));
+    z-index: 40; padding: .4rem .55rem;
+    background: var(--card); border: 1px solid var(--border); border-radius: 999px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, .16);
+  }
+  .dock-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 2.6rem; height: 2.6rem; border-radius: 999px;
+    color: var(--foreground); transition: background .15s;
+  }
+  .dock-btn:hover { background: var(--muted); }
+  .dock-btn.is-active { background: var(--primary); color: var(--primary-foreground); }
+  .dock-btn.is-active svg { stroke: currentColor; }
+  #mobileSheet.trq-open { display: block; position: fixed; inset: 0; z-index: 60; }
+  #mobileSheet.trq-open > div:last-child { animation: trqSheetUp .18s ease-out; }
+  @keyframes trqSheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+}
 </style>
 </head>
 <body>
@@ -389,9 +415,50 @@ $groups = [
   </nav>
 </aside>
 
+<?php $dockKeys = ['dashboard', 'activities', 'calendar', 'progress']; ?>
+<nav id="mobileDock" aria-label="Navigation mobile">
+  <a href="?p=settings" class="dock-btn" title="Mes paramètres">
+    <span class="flex size-8 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"><?= h($ini) ?></span>
+  </a>
+  <?php foreach ($dockKeys as $k): [$l, $ico] = $nav[$k]; ?>
+  <a href="?p=<?= $k ?>" class="dock-btn<?= $active === $k ? ' is-active' : '' ?>" aria-label="<?= h($l) ?>"<?= $active === $k ? ' aria-current="page"' : '' ?>><?= $ico ?></a>
+  <?php endforeach; ?>
+  <button type="button" class="dock-btn" aria-label="Toutes les pages" onclick="trqSheet(true)">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+  </button>
+</nav>
+
+<div id="mobileSheet" role="dialog" aria-modal="true" aria-label="Toutes les pages">
+  <div class="absolute inset-0 bg-black/50" onclick="trqSheet(false)"></div>
+  <div class="absolute inset-x-0 bottom-0 max-h-[78vh] overflow-y-auto rounded-t-2xl border bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-xl">
+    <div class="mx-auto mb-3 h-1 w-10 rounded-full bg-muted-foreground/30" data-sheet-close onclick="trqSheet(false)"></div>
+    <?php foreach ($groups as $label => $keys): ?>
+    <div class="mb-4 last:mb-0">
+      <h3 class="mb-1.5 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"><?= h($label) ?></h3>
+      <ul class="space-y-0.5">
+        <?php foreach ($keys as $k): [$l, $ico] = $nav[$k]; ?>
+        <li><a href="?p=<?= $k ?>" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium <?= $active === $k ? 'bg-primary text-primary-foreground' : 'hover:bg-muted' ?>"<?= $active === $k ? ' aria-current="page"' : '' ?>><?= $ico ?><span><?= $l ?></span></a></li>
+        <?php endforeach; ?>
+      </ul>
+    </div>
+    <?php endforeach; ?>
+    <?php if (auth_enabled()): ?>
+    <form method="post" action="login.php?a=logout" class="mt-4 border-t pt-3">
+      <button type="submit" class="btn w-full" data-variant="outline">Se déconnecter</button>
+    </form>
+    <?php endif; ?>
+  </div>
+</div>
+<script>
+function trqSheet(open) {
+  document.getElementById('mobileSheet').classList.toggle('trq-open', !!open);
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') trqSheet(false); });
+</script>
+
 <main>
   <header class="sticky top-0 z-20 flex h-14 items-center gap-2 border-b bg-background px-4">
-    <button type="button" class="btn" data-variant="ghost" data-size="icon-sm" aria-label="Afficher ou masquer le menu" onclick="document.getElementById('sidebar').toggle()">
+    <button type="button" id="sidebarToggle" class="btn" data-variant="ghost" data-size="icon-sm" aria-label="Afficher ou masquer le menu" onclick="document.getElementById('sidebar').toggle()">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
     </button>
     <span class="hidden text-sm text-muted-foreground sm:inline">TRQ</span>
