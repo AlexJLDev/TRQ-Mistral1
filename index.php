@@ -1575,39 +1575,44 @@ if ($p === 'activity') {
         o.lineJoin = 'round'; o.lineCap = 'round';
         o.beginPath();
         pts.forEach((p, i) => { const X = MG + (p[0] - minX) * s + ox, Y = T + (p[1] - minY) * s + oy; if (i) o.lineTo(X, Y); else o.moveTo(X, Y); });
-        o.strokeStyle = '#fff'; o.lineWidth = 13; o.stroke();
+        o.strokeStyle = '#fff'; o.lineWidth = 16; o.stroke();
         o.globalCompositeOperation = 'source-in';
-        o.fillStyle = 'rgba(255,255,255,0.78)'; o.fillRect(0, 0, W, H);
+        o.fillStyle = 'rgba(15,58,178,0.8)'; o.fillRect(0, 0, W, H);
         ctx.drawImage(off, 0, 0);
-        let fs = 46;
-        do { ctx.font = '600 ' + fs + 'px ' + F; fs--; } while (ctx.measureText(SHARE_META.name).width > availW && fs > 24);
-        ctx.fillStyle = 'rgba(255,255,255,0.88)';
-        ctx.fillText(SHARE_META.name, MG, 150);
-        ctx.font = '400 28px ' + F;
-        ctx.fillStyle = 'rgba(255,255,255,0.5)';
-        ctx.fillText(SHARE_META.date, MG, 196);
-        ctx.fillStyle = 'rgba(255,255,255,0.18)';
-        ctx.fillRect(MG, 1520, availW, 2);
+        const bl = a => 'rgba(15,58,178,' + a + ')';
+        let fs = 64;
+        do { ctx.font = '700 ' + fs + 'px ' + F; fs--; } while (ctx.measureText(SHARE_META.name).width > availW && fs > 30);
+        ctx.fillStyle = bl(0.92);
+        ctx.fillText(SHARE_META.name, MG, 154);
+        ctx.font = '500 32px ' + F;
+        ctx.fillStyle = bl(0.55);
+        ctx.fillText(SHARE_META.date, MG, 204);
+        ctx.fillStyle = bl(0.18);
+        ctx.fillRect(MG, 1520, availW, 3);
         const cols = [[SHARE_META.km, 'KM'], [SHARE_META.tps, 'TEMPS'], [SHARE_META.tss, 'TSS'], [SHARE_META.dp, 'D+']];
         const colW = availW / 4;
         cols.forEach(([v, l], i) => {
           const x = MG + i * colW;
-          let vs = 54;
-          do { ctx.font = '700 ' + vs + 'px ' + F; vs--; } while (ctx.measureText(v).width > colW - 10 && vs > 22);
-          ctx.fillStyle = 'rgba(255,255,255,0.85)';
-          ctx.fillText(v, x, 1650);
-          ctx.font = '500 24px ' + F;
-          ctx.fillStyle = 'rgba(255,255,255,0.45)';
-          ctx.fillText(l, x, 1700);
+          let vs = 76;
+          do { ctx.font = '800 ' + vs + 'px ' + F; vs--; } while (ctx.measureText(v).width > colW - 10 && vs > 22);
+          ctx.fillStyle = bl(0.9);
+          ctx.fillText(v, x, 1664);
+          ctx.font = '600 30px ' + F;
+          ctx.fillStyle = bl(0.5);
+          ctx.fillText(l, x, 1724);
         });
         if (logo) {
-          const ls = 72;
-          ctx.globalAlpha = 0.6;
-          ctx.drawImage(logo, W - MG - ls, H - 52 - ls, ls, ls);
-          ctx.globalAlpha = 1;
+          const ls = 132, r = 32, x0 = W - MG - ls, y0 = H - 52 - ls;
+          ctx.save();
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(x0, y0, ls, ls, r);
+          else ctx.rect(x0, y0, ls, ls);
+          ctx.clip();
+          ctx.drawImage(logo, x0, y0, ls, ls);
+          ctx.restore();
         } else {
-          ctx.font = '700 26px ' + F;
-          ctx.fillStyle = 'rgba(255,255,255,0.35)';
+          ctx.font = '800 34px ' + F;
+          ctx.fillStyle = bl(0.55);
           ctx.fillText('TRQ', W - MG - ctx.measureText('TRQ').width, H - 60);
         }
       }
@@ -1616,25 +1621,8 @@ if ($p === 'activity') {
         if (window.__shareLogo !== undefined) return Promise.resolve(window.__shareLogo);
         const tryOne = src => new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = src; });
         return tryOne('assets/logo-512.png').then(i => i || tryOne('assets/logo-192.png')).then(img => {
-          window.__shareLogo = null;
-          if (img) {
-            try {
-              const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
-              const x = c.getContext('2d', {willReadFrequently: true});
-              x.drawImage(img, 0, 0);
-              const d = x.getImageData(0, 0, c.width, c.height), a = d.data;
-              const bgLum = 0.299 * a[8] + 0.587 * a[9] + 0.114 * a[10];
-              for (let i = 0; i < a.length; i += 4) {
-                const l = 0.299 * a[i] + 0.587 * a[i + 1] + 0.114 * a[i + 2];
-                const t = Math.max(0, Math.min(1, (l - bgLum) / (255 - bgLum)));
-                a[i] = a[i + 1] = a[i + 2] = 255;
-                a[i + 3] = Math.round(t * 255);
-              }
-              x.putImageData(d, 0, 0);
-              window.__shareLogo = c;
-            } catch (e) { window.__shareLogo = img; }
-          }
-          return window.__shareLogo;
+          window.__shareLogo = img;
+          return img;
         });
       }
 
