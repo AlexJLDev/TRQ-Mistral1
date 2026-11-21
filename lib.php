@@ -1228,24 +1228,21 @@ function process_activity(array $row): void {
             $blob = gzcompress(json_encode($S), 6);
         } catch (Throwable $e) { }
     }
+} else {
+    /* Séance sans flux stockés : récupération complète des streams intervals.icu — sans ce bloc,
+       $blob et $S restent vides et l'UPDATE écrase la séance avec des valeurs nulles. */
+    $blob = null;
+    try {
+        $raw = icu_get('/activity/' . $row['id'] . '/streams.json',
+            ['types' => 'time,watts,heartrate,velocity_smooth,cadence,altitude,distance,grade,temp,latlng']);
+        foreach ($raw as $s) {
+            if (empty($s['data'])) continue;
+            if (($s['type'] ?? '') === 'latlng') { $ll = normalize_latlng($s); if ($ll) $S['latlng'] = $ll; continue; }
+            $S[$s['type']] = $s['data'];
+        }
+        if ($S) { $S['gps_checked'] = 1; $blob = gzcompress(json_encode($S), 6); }
+    } catch (Throwable $e) { }
 }
-/*
-    if ($row['streams'] !== null) {
-        $S = json_decode(gzuncompress($row['streams']), true) ?: [];
-        $blob = $row['streams'];
-    } else {
-        $blob = null;
-        try {
-            $raw = icu_get('/activity/' . $row['id'] . '/streams.json',
-                ['types' => 'time,watts,heartrate,velocity_smooth,cadence,altitude,distance,grade,temp,latlng']);
-            foreach ($raw as $s) {
-                if (empty($s['data'])) continue;
-                if (($s['type'] ?? '') === 'latlng') { $ll = normalize_latlng($s); if ($ll) $S['latlng'] = $ll; continue; }
-                $S[$s['type']] = $s['data'];
-            }
-            if ($S) { $S['gps_checked'] = 1; $blob = gzcompress(json_encode($S), 6); }
-        } catch (Throwable $e) { }
-    }*/
     $m = analyze($row, $S);
 
     // Tours : on interroge intervals.icu une seule fois (laps = NULL), puis on recalcule localement.
