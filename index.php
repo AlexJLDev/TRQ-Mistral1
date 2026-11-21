@@ -9,6 +9,13 @@ $pdo = db();
 
 /* ---------- Paramètres POST ---------- */
 if ($p === 'settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    /* Sélecteur de langue : mini-formulaire dédié (ne touche pas aux autres réglages) */
+    if (array_key_exists('lang', $_POST) && !array_key_exists('api_key', $_POST)) {
+        $lang = trim($_POST['lang']);
+        if (array_key_exists($lang, trq_langs())) cfg_set('lang', $lang);
+        header('Location: ?p=settings&saved=1');
+        exit;
+    }
     foreach (['api_key', 'athlete_id', 'ftp', 'lthr', 'max_hr', 'rest_hr', 'base_hrv', 'weight', 'body_fat'] as $k) {
         cfg_set($k, trim($_POST[$k] ?? ''));
     }
@@ -150,30 +157,30 @@ function render_goals_grid(array $gs): void {
 }
 
 function readiness_badge(?float $score): string {
-    if ($score === null) return '<span class="badge" data-variant="outline">Non renseigné</span>';
-    if ($score >= 80) return '<span class="badge bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">Optimal (' . round($score) . ')</span>';
-    if ($score >= 65) return '<span class="badge bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30">Bon (' . round($score) . ')</span>';
-    if ($score >= 50) return '<span class="badge bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">Modéré (' . round($score) . ')</span>';
-    return '<span class="badge" data-variant="destructive">Récup. requise (' . round($score) . ')</span>';
+    if ($score === null) return '<span class="badge" data-variant="outline">' . t('Non renseigné') . '</span>';
+    if ($score >= 80) return '<span class="badge bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">' . t('Optimal (') . round($score) . ')</span>';
+    if ($score >= 65) return '<span class="badge bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30">' . t('Bon (') . round($score) . ')</span>';
+    if ($score >= 50) return '<span class="badge bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">' . t('Modéré (') . round($score) . ')</span>';
+    return '<span class="badge" data-variant="destructive">' . t('Récup. requise (') . round($score) . ')</span>';
 }
 
 function head(string $title, string $active): void {
     $nav = [
-        'dashboard' => ['Tableau de bord', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>'],
-        'activities' => ['Activités', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>'],
-        'calendar' => ['Calendrier', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>'],
-        'power' => ['Courbes de puissance', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>'],
-        'workouts' => ['Entraînements', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h.01M3 12h.01M3 17h.01"/><path d="M8 7h13M8 12h13M8 17h13"/></svg>'],
-        'admin' => ['Administration', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'],
-        'wellness' => ['Wellness & Santé', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>'],
-        'nutrition' => ['Nutrition', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>'],
-        'progress' => ['Progression', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>'],
-        'zones' => ['Zones', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'],
-        'settings' => ['Paramètres', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'],
+        'dashboard' => [t('Tableau de bord'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>'],
+        'activities' => [t('Activités'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>'],
+        'calendar' => [t('Calendrier'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>'],
+        'power' => [t('Courbes de puissance'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>'],
+        'workouts' => [t('Entraînements'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h.01M3 12h.01M3 17h.01"/><path d="M8 7h13M8 12h13M8 17h13"/></svg>'],
+        'admin' => [t('Administration'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'],
+        'wellness' => [t('Wellness & Santé'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>'],
+        'nutrition' => [t('Nutrition'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>'],
+        'progress' => [t('Progression'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>'],
+        'zones' => [t('Zones'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'],
+        'settings' => [t('Paramètres'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'],
     ];
     ?>
 <!doctype html>
-<html lang="fr" class="antialiased">
+<html lang="<?= trq_lang() ?>" class="antialiased">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -400,10 +407,10 @@ tr.lap-flash { animation: lapflash 1.6s ease-out; }
 </script>
 <?php
 $groups = [
-    'Analyse'     => ['dashboard', 'activities', 'calendar'],
-    'Performance' => ['power', 'workouts', 'zones', 'progress'],
-    'Santé'       => ['wellness', 'nutrition'],
-    'Compte'      => array_merge(['settings'], (auth_enabled() && is_admin()) ? ['admin'] : []),
+    t('Analyse')     => ['dashboard', 'activities', 'calendar'],
+    t('Performance') => ['power', 'workouts', 'zones', 'progress'],
+    t('Santé')       => ['wellness', 'nutrition'],
+    t('Compte')      => array_merge(['settings'], (auth_enabled() && is_admin()) ? ['admin'] : []),
 ];
 ?>
 <aside id="sidebar" class="sidebar" data-side="left">
@@ -799,7 +806,7 @@ $count = (int)$pdo->query('SELECT COUNT(*) FROM activities')->fetchColumn();
    TABLEAU DE BORD (DASHBOARD)
    ======================================================== */
 if ($p === 'dashboard') {
-    head('Tableau de bord', 'dashboard');
+    head(t('Tableau de bord'), 'dashboard');
     if (!$count) { empty_state(); foot(); exit; }
 
     $sport = in_array($_GET['sport'] ?? '', ['ride', 'run'], true) ? $_GET['sport'] : null;
@@ -1226,7 +1233,7 @@ if ($p === 'dashboard') {
    ACTIVITÉS (ACTIVITIES LIST)
    ======================================================== */
 if ($p === 'activities') {
-    head('Activités', 'activities');
+    head(t('Activités'), 'activities');
     if (!$count) { empty_state(); foot(); exit; }
 
     $sport = in_array($_GET['sport'] ?? '', ['ride', 'run', 'swim', 'other'], true) ? $_GET['sport'] : null;
@@ -3646,7 +3653,7 @@ const IS_RUN_PAGE = <?= $isRun ? 'true' : 'false' ?>;
    COURBES DE PUISSANCE WKO5 MULTI-SAISONS (PDC)
    ======================================================== */
 if ($p === 'power') {
-    head('Courbes de puissance', 'power');
+    head(t('Courbes de puissance'), 'power');
     $sport = ($_GET['sport'] ?? 'ride') === 'run' ? 'run' : 'ride';
     $isRun = $sport === 'run';
 
@@ -3855,7 +3862,7 @@ if ($p === 'power') {
    WELLNESS & SANTÉ (HRV, FC REPOS, SOMMEIL)
    ======================================================== */
 if ($p === 'wellness') {
-    head('Wellness & Récupération', 'wellness');
+    head(t('Wellness & Récupération'), 'wellness');
     $summary = get_wellness_summary(60);
     $history = $summary['history'] ?? [];
     $todayRow = end($history) ?: null;
@@ -4083,7 +4090,7 @@ if ($p === 'wellness') {
    CALENDRIER D'ENTRAÎNEMENT STYLE TRAININGPEAKS
    ======================================================== */
 if ($p === 'calendar') {
-    head('Calendrier d’entraînement', 'calendar');
+    head(t('Calendrier d’entraînement'), 'calendar');
 
     $today = date('Y-m-d');
     $mParam = $_GET['m'] ?? date('Y-m');
@@ -4102,8 +4109,8 @@ if ($p === 'calendar') {
     $prevW = (clone $weekStart)->modify('-7 days')->format('Y-m-d');
     $nextW = (clone $weekStart)->modify('+7 days')->format('Y-m-d');
 
-    $calMoisFr = [1 => 'janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
-    $calJoursFr = [1 => 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
+    $calMoisFr = [1 => t('janvier'), t('février'), t('mars'), t('avril'), t('mai'), t('juin'), t('juillet'), t('août'), t('septembre'), t('octobre'), t('novembre'), t('décembre')];
+    $calJoursFr = [1 => t('Lundi'), t('Mardi'), t('Mercredi'), t('Jeudi'), t('Vendredi'), t('Samedi'), t('Dimanche')];
 
     $loadRange = function (string $from, string $to) use ($pdo): array {
         $byDay = [];
@@ -4372,7 +4379,7 @@ if ($p === 'calendar') {
    ======================================================== */
 /* ================= ENTRAÎNEMENTS (Workout Builder) ================= */
 if ($p === 'workouts') {
-    head('Entraînements', 'workouts');
+    head(t('Entraînements'), 'workouts');
     $woId = (int)($_GET['id'] ?? 0); $planId = (int)($_GET['plan'] ?? 0);
     $woData = null; $planDate = null; $notice = '';
     if ($woId) {
@@ -4536,7 +4543,7 @@ if ($p === 'workouts') {
 
 /* ================= ADMINISTRATION (comptes) ================= */
 if ($p === 'admin') {
-    head('Administration', 'admin');
+    head(t('Administration'), 'admin');
     if (!auth_enabled() || !is_admin()) { echo '<div class="alert" data-variant="destructive"><h2>Accès réservé aux administrateurs.</h2></div>'; foot(); exit; }
     $users = auth_users_list(); $regMode = (string)trq_config('registration');
     ?>
@@ -4570,7 +4577,7 @@ if ($p === 'admin') {
 }
 
 if ($p === 'zones') {
-    head('Zones d’entraînement', 'zones');
+    head(t('Zones d’entraînement'), 'zones');
     $lthr = (float)cfg('lthr', 0);
     $runThrPace = (int)cfg('run_thr_pace', 0);
 
@@ -4691,7 +4698,7 @@ if ($p === 'zones') {
    PROGRESSION (RAPPORT HEBDO / EFFICIENCE / RECORDS)
    ======================================================== */
 if ($p === 'progress') {
-    head('Progression', 'progress');
+    head(t('Progression'), 'progress');
     if (!$count) { empty_state(); foot(); exit; }
 
     $wks = array_values(progress_weeks(10));
@@ -4952,7 +4959,7 @@ if ($p === 'progress') {
    PARAMÈTRES (SETTINGS)
    ======================================================== */
 if ($p === 'settings') {
-    head('Paramètres', 'settings');
+    head(t('Paramètres'), 'settings');
     $pt = (int)cfg('run_thr_pace', 0);
     $f = fn($k, $d = '') => h(cfg($k, $d));
     ?>
@@ -4969,11 +4976,22 @@ if ($p === 'settings') {
           <h3 class="text-base font-semibold">Apparence</h3>
           <p class="text-xs text-muted-foreground">Style de l'interface (Basecoat) — appliqué immédiatement, mémorisé sur cet appareil</p>
         </header>
-        <div class="field max-w-56">
-          <label class="text-xs font-medium">Style</label>
-          <select id="styleSel" class="select h-9 text-sm">
-            <?php foreach (['vega', 'nova', 'maia', 'lyra', 'mira', 'luma', 'sera', 'rhea'] as $s) echo '<option value="' . $s . '">' . ucfirst($s) . '</option>'; ?>
-          </select>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div class="field">
+            <label class="text-xs font-medium">Style</label>
+            <select id="styleSel" class="select h-9 text-sm">
+              <?php foreach (['vega', 'nova', 'maia', 'lyra', 'mira', 'luma', 'sera', 'rhea'] as $s) echo '<option value="' . $s . '">' . ucfirst($s) . '</option>'; ?>
+            </select>
+          </div>
+          <form method="post" action="?p=settings" class="field">
+            <label class="text-xs font-medium" for="langSel">Langue / Language</label>
+            <select id="langSel" name="lang" class="select h-9 text-sm" onchange="this.form.submit()">
+              <?php foreach (trq_langs() as $trqLc => $trqLn): ?>
+              <option value="<?= $trqLc ?>"<?= trq_lang() === $trqLc ? ' selected' : '' ?>><?= htmlspecialchars($trqLn, ENT_QUOTES, 'UTF-8') ?></option>
+              <?php endforeach; ?>
+            </select>
+            <noscript><button class="btn mt-2" data-size="sm" type="submit">OK</button></noscript>
+          </form>
         </div>
       </div>
 
@@ -5147,7 +5165,7 @@ if ($p === 'settings') {
    PAGE NUTRITION — cibles issues du statement UCI 2026
    ======================================================== */
 if ($p === 'nutrition') {
-    head('Nutrition', 'nutrition');
+    head(t('Nutrition'), 'nutrition');
     $kg = nutrition_weight();
     $bfRaw = cfg('body_fat');
     $bf = ($bfRaw !== null && (float)$bfRaw > 0) ? (float)$bfRaw : null;
@@ -5319,7 +5337,7 @@ if ($p === 'nutrition') {
 }
 
 http_response_code(404);
-head('Page introuvable', '');
+head(t('Page introuvable'), '');
 echo '<div class="card p-8 text-center max-w-md mx-auto my-12">';
 echo '<h2 class="text-xl font-bold">Page introuvable</h2>';
 echo '<p class="text-sm text-muted-foreground mt-2 mb-4">La page demandée n’existe pas.</p>';
