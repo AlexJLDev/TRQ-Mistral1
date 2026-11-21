@@ -470,6 +470,7 @@ function peak_histograms(array $S, float $ftp = 250): array {
     for ($i = 0; $i <= 9; $i++) $vEdges[] = round($i * $vStep, 1);
 
     $cEdges = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130];
+    $gEdges = [-12, -8, -5, -3, -1, 1, 3, 5, 8, 12];
 
     return [
         'power'    => $w ? $binFixed($w, $pEdges, true) : null,
