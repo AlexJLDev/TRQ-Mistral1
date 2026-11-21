@@ -143,6 +143,20 @@ try {
         db()->prepare('UPDATE activities SET rpe=?, feel=? WHERE id=?')->execute([$frpe, $ffeel !== '' ? $ffeel : null, $fid]);
         echo json_encode(['ok' => true]);
 
+    } elseif ($action === 'activity_resync') {
+        // Re-force la synchro d'UNE séance : flux + tours remis à zéro puis retraités immédiatement depuis intervals.icu
+        $rid = (string)($_POST['id'] ?? '');
+        if ($rid === '') throw new RuntimeException('Activité introuvable.');
+        db()->prepare('UPDATE activities SET synced=0, streams=NULL, laps=NULL WHERE id=?')->execute([$rid]);
+        try {
+            $st = db()->prepare('SELECT * FROM activities WHERE id=?');
+            $st->execute([$rid]);
+            $r = $st->fetch();
+            if (!$r) throw new RuntimeException('Activité introuvable.');
+            process_activity($r);
+        } catch (Throwable $e) { error_log('activity_resync: ' . $e->getMessage() . ' @ ' . basename($e->getFile()) . ':' . $e->getLine()); }
+        echo json_encode(['ok' => true]);
+
     } elseif ($action === 'week_goals_set') {
         $dec = json_decode((string)($_POST['goals'] ?? ''), true);
         if (!is_array($dec)) throw new RuntimeException('Objectifs invalides.');
