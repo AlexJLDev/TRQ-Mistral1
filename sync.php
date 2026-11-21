@@ -19,10 +19,11 @@ try {
     if ($action === 'list') {
         // 1. Liste des activités depuis intervals.icu (les séances connues sont mises à jour : nom, durée, FC, charge icu…)
         $days = max(7, (int)($_POST['days'] ?? 365));
-        $oldest = date('Y-m-d', strtotime("-$days days"));
+        $q = ['newest' => date('Y-m-d')];
+        if ($days < 3650) $q['oldest'] = date('Y-m-d', strtotime("-$days days"));
         if (!cfg('ftp')) import_athlete_settings();
         
-        $list = icu_get('/athlete/' . athlete_id() . '/activities', ['oldest' => $oldest, 'newest' => date('Y-m-d')]);
+        $list = icu_get('/athlete/' . athlete_id() . '/activities', $q);
         $ins = $pdo->prepare('INSERT INTO activities
             (id,date,type,sport,name,duration,distance,elev,avg_hr,max_hr,avg_speed,avg_w,icu_load)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)

@@ -939,11 +939,12 @@ if ($p === 'dashboard') {
           <h3 class="text-base font-semibold">PMC Coggan — TSS</h3>
           <p class="text-xs text-muted-foreground">Forme (CTL 42 j), fatigue (ATL 7 j), charge quotidienne, et fraîcheur (TSB) par zones de Coggan</p>
         </div>
-        <div class="flex items-center gap-1" id="pmcRange" role="group" aria-label="Période">
+        <div class="flex items-center gap-1 flex-wrap sm:flex-nowrap" id="pmcRange" role="group" aria-label="Période">
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="90">3 mois</button>
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="180">6 mois</button>
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="365">1 an</button>
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="0">Tout</button>
+          <button type="button" class="btn" data-size="sm" data-variant="outline" onclick="runSync(4000)" title="<?= h(t('Synchroniser tout l\'historique intervals.icu (long la première fois)')) ?>"><?= h(t('Historique complet')) ?></button>
         </div>
       </header>
       <section class="p-4">
