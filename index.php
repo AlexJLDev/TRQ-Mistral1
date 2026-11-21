@@ -1557,7 +1557,7 @@ if ($p === 'activity') {
         file: <?= json_encode('trq-seance-' . preg_replace('/[^A-Za-z0-9_-]/', '_', (string)$a['id']) . '.png') ?>
       };
 
-      function drawShareImage(cv, P) {
+      function drawShareImage(cv, P, logo) {
         const W = 1080, H = 1920, MG = 72, T = 300, B = 1380;
         const F = '"Segoe UI", -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif';
         cv.width = W; cv.height = H;
@@ -1600,9 +1600,42 @@ if ($p === 'activity') {
           ctx.fillStyle = 'rgba(255,255,255,0.45)';
           ctx.fillText(l, x, 1700);
         });
-        ctx.font = '700 26px ' + F;
-        ctx.fillStyle = 'rgba(255,255,255,0.35)';
-        ctx.fillText('TRQ', W - MG - ctx.measureText('TRQ').width, H - 60);
+        if (logo) {
+          const ls = 72;
+          ctx.globalAlpha = 0.6;
+          ctx.drawImage(logo, W - MG - ls, H - 52 - ls, ls, ls);
+          ctx.globalAlpha = 1;
+        } else {
+          ctx.font = '700 26px ' + F;
+          ctx.fillStyle = 'rgba(255,255,255,0.35)';
+          ctx.fillText('TRQ', W - MG - ctx.measureText('TRQ').width, H - 60);
+        }
+      }
+
+      function loadShareLogo() {
+        if (window.__shareLogo !== undefined) return Promise.resolve(window.__shareLogo);
+        const tryOne = src => new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = src; });
+        return tryOne('assets/logo-512.png').then(i => i || tryOne('assets/logo-192.png')).then(img => {
+          window.__shareLogo = null;
+          if (img) {
+            try {
+              const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+              const x = c.getContext('2d', {willReadFrequently: true});
+              x.drawImage(img, 0, 0);
+              const d = x.getImageData(0, 0, c.width, c.height), a = d.data;
+              const bgLum = 0.299 * a[8] + 0.587 * a[9] + 0.114 * a[10];
+              for (let i = 0; i < a.length; i += 4) {
+                const l = 0.299 * a[i] + 0.587 * a[i + 1] + 0.114 * a[i + 2];
+                const t = Math.max(0, Math.min(1, (l - bgLum) / (255 - bgLum)));
+                a[i] = a[i + 1] = a[i + 2] = 255;
+                a[i + 3] = Math.round(t * 255);
+              }
+              x.putImageData(d, 0, 0);
+              window.__shareLogo = c;
+            } catch (e) { window.__shareLogo = img; }
+          }
+          return window.__shareLogo;
+        });
       }
 
       async function openShare() {
@@ -1611,8 +1644,10 @@ if ($p === 'activity') {
         }
         const g = window.trqGps;
         if (!g || !g.pts || g.pts.length < 2) { alert('Aucun tracé GPS disponible pour cette séance.'); return; }
-        drawShareImage(document.getElementById('sharePreview'), g.pts);
-        document.getElementById('modal-share').showModal();
+        loadShareLogo().then(logo => {
+          drawShareImage(document.getElementById('sharePreview'), g.pts, logo);
+          document.getElementById('modal-share').showModal();
+        });
       }
 
       document.getElementById('shareDownloadBtn').addEventListener('click', () => {
