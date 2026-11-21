@@ -786,12 +786,18 @@ async function runSync(days = 365, recompute = false) {
             try { await call('sync_wellness', {days: 90}); } catch(e){}
         }
         total = j.remaining || 1;
+        let stall = 0, last = total;
         while (j.remaining > 0) {
             msg.textContent = `Traitement des flux & analyse : ${total - j.remaining} / ${total}`;
             count.textContent = Math.round(((total - j.remaining) / total) * 100) + '%';
+            await new Promise(r => setTimeout(r, 350));
             j = await call('process');
+            stall = j.remaining < last ? 0 : stall + 1;
+            last = j.remaining;
+            if (stall >= 5) throw new Error('des séances résistent au traitement (rate-limit intervals.icu ou données manquantes) — réessaie plus tard ou resynchronise la séance concernée depuis son détail');
         }
-        msg.textContent = 'Synchronisation terminée avec succès !';
+        const tail = !recompute && j.created ? ` — ${j.created} nouvelle${j.created > 1 ? 's' : ''} séance${j.created > 1 ? 's' : ''}` : '';
+        msg.textContent = 'Synchronisation terminée avec succès !' + tail;
         setTimeout(() => location.reload(), 600);
     } catch (e) {
         msg.textContent = 'Erreur : ' + e.message;

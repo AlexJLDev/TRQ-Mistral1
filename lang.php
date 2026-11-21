@@ -1053,6 +1053,7 @@ function trq_i18n(): array {
     'Envoi du fichier impossible (trop gros ou requête interrompue).' => 'File upload failed (too large or interrupted request).',
     'Image trop lourde (4 Mo max).' => 'Image too large (4 MB max).',
     'Fichier non reconnu comme une image (JPEG, PNG, WebP ou GIF).' => 'File not recognized as an image (JPEG, PNG, WebP or GIF).',
+    'des séances résistent au traitement (rate-limit intervals.icu ou données manquantes) — réessaie plus tard ou resynchronise la séance concernée depuis son détail' => 'some workouts keep failing (intervals.icu rate limit or missing data) — try again later or resync that workout from its detail page',
     ];
     return $d;
 }

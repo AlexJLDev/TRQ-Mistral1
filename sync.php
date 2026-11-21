@@ -17,17 +17,24 @@ try {
     $pdo = db();
 
     if ($action === 'list') {
-        // 1. Liste des activités depuis intervals.icu
+        // 1. Liste des activités depuis intervals.icu (les séances connues sont mises à jour : nom, durée, FC, charge icu…)
         $days = max(7, (int)($_POST['days'] ?? 365));
         $oldest = date('Y-m-d', strtotime("-$days days"));
         if (!cfg('ftp')) import_athlete_settings();
         
         $list = icu_get('/athlete/' . athlete_id() . '/activities', ['oldest' => $oldest, 'newest' => date('Y-m-d')]);
-        $ins = $pdo->prepare('INSERT OR IGNORE INTO activities
+        $ins = $pdo->prepare('INSERT INTO activities
             (id,date,type,sport,name,duration,distance,elev,avg_hr,max_hr,avg_speed,avg_w,icu_load)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+                name=excluded.name, duration=excluded.duration, distance=excluded.distance, elev=excluded.elev,
+                avg_hr=excluded.avg_hr, max_hr=excluded.max_hr, avg_speed=excluded.avg_speed,
+                avg_w=excluded.avg_w, icu_load=excluded.icu_load,
+                tss=CASE WHEN activities.tss_type='load' THEN excluded.icu_load ELSE activities.tss END');
+        $known = [];
+        foreach ($pdo->query('SELECT id FROM activities')->fetchAll(PDO::FETCH_COLUMN) as $kid) $known[$kid] = true;
         
-        $n = 0;
+        $n = 0; $created = 0;
         $pdo->beginTransaction();
         foreach ($list as $a) {
             if (empty($a['start_date_local']) || empty($a['id'])) continue;
@@ -47,10 +54,11 @@ try {
                 $a['icu_training_load'] ?? null
             ]);
             $n++;
+            if (!isset($known[(string)$a['id']])) $created++;
         }
         $pdo->commit();
         $rem = (int)$pdo->query('SELECT COUNT(*) FROM activities WHERE synced=0')->fetchColumn();
-        echo json_encode(['ok' => true, 'found' => $n, 'remaining' => $rem]);
+        echo json_encode(['ok' => true, 'found' => $n, 'created' => $created, 'remaining' => $rem]);
 
     } elseif ($action === 'process') {
         // 2. Traitement des flux 1 Hz et analyse des activités (par lot de 6)
