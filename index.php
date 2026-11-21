@@ -763,7 +763,13 @@ async function deletePlanned(id) {
 }
 async function call(action, extra = {}) {
   const r = await fetch('sync.php', {method: 'POST', body: new URLSearchParams({action, ...extra})});
-  let j; try { j = await r.json(); } catch (e) { throw new Error('Réponse invalide du serveur (HTTP ' + r.status + ').'); }
+  let txt = '';
+  try { txt = await r.text(); } catch (e) {}
+  let j;
+  try { j = JSON.parse(txt); } catch (e) {
+    const frag = txt.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+    throw new Error('Réponse invalide du serveur (HTTP ' + r.status + ')' + (frag ? ' : ' + frag : ' — réponse vide'));
+  }
   if (j.login) { location.href = 'login.php'; throw new Error(j.error); }
   if (!j.ok) throw new Error(j.error);
   return j;

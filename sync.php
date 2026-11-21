@@ -3,12 +3,14 @@ require_once __DIR__ . '/lib.php';
 bootstrap_errors(true);
 /* Sécurité : sync.php n'accepte que des POST — une action déclenchée en GET contournerait le contrôle CSRF (valable uniquement sur POST) et reste exécutable via une simple navigation cross-site. */
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+    while (ob_get_level() > 0) ob_end_clean();
     http_response_code(405);
     header('Content-Type: application/json');
     echo json_encode(['ok' => false, 'error' => t('Méthode non autorisée (POST requis).')]);
     exit;
 }
 $me = require_login(true);                 // 401 JSON si non connecté ; jeton CSRF exigé (en-tête X-CSRF-Token)
+while (ob_get_level() > 0) ob_end_clean(); // jette tout affichage parasite (warning/deprecation émis au chargement de lib.php) qui corromprait la réponse JSON
 header('Content-Type: application/json');
 set_time_limit(180);
 
