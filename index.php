@@ -1908,17 +1908,17 @@ if ($p === 'activity') {
             <?php if ($pc['note']): ?><p class="text-xs text-muted-foreground"><?= h($pc['note']) ?></p><?php endif; ?>
             <?php $qDur = $pc['dur']['planned'] > 0 ? $pc['dur']['actual'] / $pc['dur']['planned'] : null;
                   $qTss = $pc['tss']['planned'] > 0 ? $pc['tss']['actual'] / $pc['tss']['planned'] : null;
-                  $dDisp = function ($q, float $lo, float $hi, ?int $score) use ($pctOf) {
-                      if ($q === null || ($q >= $lo && $q <= $hi)) return $pctOf($score);
-                      return ($q > 1 ? '+' : '−') . round(abs($q - 1) * 100) . '%';
+                  $dSub = function ($q, float $lo, float $hi): string {
+                      if ($q === null || ($q >= $lo && $q <= $hi)) return '';
+                      return ' (' . ($q > 1 ? '+' : '−') . round(abs($q - 1) * 100) . '% ' . t('du plan') . ')';
                   }; ?>
             <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <?php foreach ([['Respect des cibles', $pc['parts']['structure'], $pctOf($pc['parts']['structure']), $pc['parts']['structure'] === null ? 'non évalué' : 'étape par étape'],
-                              ['Durée', $pc['parts']['duration'], $dDisp($qDur, 0.95, 1.10, $pc['parts']['duration']), fmt_dur((int)$pc['dur']['planned']) . ' → ' . fmt_dur((int)$pc['dur']['actual'])],
-                              ['Charge (TSS)', $pc['parts']['load'], $dDisp($qTss, 0.9, 1.1, $pc['parts']['load']), round($pc['tss']['planned']) . ' → ' . round($pc['tss']['actual'])]] as [$lbl, $val, $disp, $sub]): ?>
+              <?php foreach ([['Respect des cibles', $pc['parts']['structure'], $pc['parts']['structure'] === null ? 'non évalué' : 'étape par étape'],
+                              ['Durée', $pc['parts']['duration'], fmt_dur((int)$pc['dur']['planned']) . ' → ' . fmt_dur((int)$pc['dur']['actual']) . $dSub($qDur, 0.95, 1.10)],
+                              ['Charge (TSS)', $pc['parts']['load'], round($pc['tss']['planned']) . ' → ' . round($pc['tss']['actual']) . $dSub($qTss, 0.9, 1.1)]] as [$lbl, $val, $sub]): ?>
                 <div class="rounded-lg border p-3">
                   <p class="text-[10px] uppercase tracking-wide text-muted-foreground"><?= $lbl ?></p>
-                  <p class="text-xl font-semibold tabular-nums"><?= $disp ?></p>
+                  <p class="text-xl font-semibold tabular-nums" style="color:<?= $barCol($val) ?>"><?= $pctOf($val) ?></p>
                   <div class="my-1 h-1.5 overflow-hidden rounded-full bg-muted"><div class="h-full rounded-full" style="width:<?= (int)($val ?? 0) ?>%;background:<?= $barCol($val) ?>"></div></div>
                   <p class="text-[11px] text-muted-foreground tabular-nums"><?= h($sub) ?></p>
                 </div>

@@ -1046,6 +1046,7 @@ function trq_i18n(): array {
     'Charge (TSS)' => 'Load (TSS)',
     'départ aligné (latence FC incluse)' => 'start aligned (HR lag included)',
     'départ aligné sur le plan' => 'start aligned with plan',
+    'du plan' => 'of plan',
     ];
     return $d;
 }
