@@ -1475,12 +1475,10 @@ if ($p === 'activity') {
           </div>
         </div>
         <div class="flex items-center gap-2">
-          <?php if ($showMap): ?>
           <button type="button" class="btn" data-variant="outline" data-size="sm" aria-label="Exporter une image de partage (tracé, km, temps, TSS, D+)" title="Exporter une image de partage (tracé, km, temps, TSS, D+)" onclick="openShare()">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/></svg>
             Partager
           </button>
-          <?php endif; ?>
           <button type="button" id="actResyncBtn" class="btn" data-variant="outline" data-size="sm" aria-label="Resynchroniser cette séance depuis intervals.icu" title="Resynchroniser cette séance depuis intervals.icu (flux, tours, pics)" onclick="actResync(this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
             Resynchroniser
@@ -1530,12 +1528,16 @@ if ($p === 'activity') {
           <header class="flex items-center justify-between pb-3 border-b mb-4">
             <div>
               <h3 class="text-base font-semibold">Partager la séance</h3>
-              <p class="text-xs text-muted-foreground">PNG 1080×1920 · fond transparent · tracé + KM / Temps / TSS / D+</p>
+              <p class="text-xs text-muted-foreground">PNG 1080×1920 · fond transparent · tracé ou stats seules</p>
             </div>
             <button type="button" class="btn" data-variant="ghost" data-size="icon-sm" aria-label="Fermer" onclick="document.getElementById('modal-share').close()">
               <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
             </button>
           </header>
+          <div class="flex justify-center gap-1 mb-3">
+            <button type="button" id="shareTabTrace" class="btn" data-size="sm" onclick="setShareVariant('trace')">Tracé & stats</button>
+            <button type="button" id="shareTabStats" class="btn" data-size="sm" data-variant="outline" onclick="setShareVariant('stats')">Stats seules</button>
+          </div>
           <div class="rounded-lg border p-3 flex justify-center" style="background:#26262b">
             <canvas id="sharePreview" width="1080" height="1920" class="max-w-full h-auto rounded" style="max-height:56vh"></canvas>
           </div>
@@ -1554,8 +1556,79 @@ if ($p === 'activity') {
         tps: <?= json_encode(fmt_dur((int)$a['duration'])) ?>,
         tss: <?= json_encode($a['tss'] !== null && $a['tss'] !== '' ? n(floatval($a['tss']), 0) : '—') ?>,
         dp: <?= json_encode(($a['elev'] !== null && $a['elev'] !== '') ? n(floatval($a['elev']), 0) . ' m' : '—') ?>,
-        file: <?= json_encode('trq-seance-' . preg_replace('/[^A-Za-z0-9_-]/', '_', (string)$a['id']) . '.png') ?>
+        file: <?= json_encode(preg_replace('/[^A-Za-z0-9_-]/', '_', (string)$a['id'])) ?>
       };
+
+      let shareVariant = 'trace';
+      function hasShareGps() { const g = window.trqGps; return !!(g && g.pts && g.pts.length >= 2); }
+
+      function drawShareStats(cv, logo) {
+        const W = 1080, H = 1920, MG = 72;
+        const F = '"Segoe UI", -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif';
+        const bl = a => 'rgba(15,58,178,' + a + ')';
+        cv.width = W; cv.height = H;
+        const ctx = cv.getContext('2d');
+        ctx.clearRect(0, 0, W, H);
+        const availW = W - 2 * MG;
+        let fs = 56;
+        do { ctx.font = '700 ' + fs + 'px ' + F; fs--; } while (ctx.measureText(SHARE_META.name).width > availW && fs > 30);
+        ctx.fillStyle = bl(0.92);
+        ctx.textAlign = 'center';
+        ctx.fillText(SHARE_META.name, W / 2, 150);
+        ctx.font = '500 32px ' + F;
+        ctx.fillStyle = bl(0.55);
+        ctx.fillText(SHARE_META.date, W / 2, 204);
+        const cols = [[SHARE_META.km, 'KM'], [SHARE_META.tps, 'TEMPS'], [SHARE_META.tss, 'TSS'], [SHARE_META.dp, 'D+']];
+        const top = 400, bot = 1600, bh = (bot - top) / cols.length;
+        cols.forEach(([v, l], i) => {
+          const yb = top + i * bh;
+          let vs = bh * 0.52;
+          do { ctx.font = '800 ' + Math.round(vs) + 'px ' + F; vs -= 2; } while (ctx.measureText(v).width > availW && vs > 40);
+          ctx.fillStyle = bl(0.9);
+          ctx.fillText(v, W / 2, yb + bh * 0.58);
+          ctx.font = '600 34px ' + F;
+          ctx.fillStyle = bl(0.5);
+          ctx.fillText(l.toUpperCase(), W / 2, yb + bh * 0.84);
+          if (i) { ctx.fillStyle = bl(0.12); ctx.fillRect(MG, yb, availW, 2); }
+        });
+        ctx.textAlign = 'left';
+        if (logo) {
+          const ls = 132, r = 32, x0 = W - MG - ls, y0 = H - 52 - ls;
+          ctx.save();
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(x0, y0, ls, ls, r);
+          else ctx.rect(x0, y0, ls, ls);
+          ctx.clip();
+          ctx.drawImage(logo, x0, y0, ls, ls);
+          ctx.restore();
+        } else {
+          ctx.font = '800 34px ' + F;
+          ctx.fillStyle = bl(0.55);
+          ctx.fillText('TRQ', W - MG - ctx.measureText('TRQ').width, H - 60);
+        }
+      }
+
+      function renderShare() {
+        const cv = document.getElementById('sharePreview');
+        if (shareVariant === 'trace' && hasShareGps()) drawShareImage(cv, window.trqGps.pts, window.__shareLogo || null);
+        else drawShareStats(cv, window.__shareLogo || null);
+      }
+
+      function shareTabs() {
+        const t = document.getElementById('shareTabTrace'), s = document.getElementById('shareTabStats');
+        const on = shareVariant === 'trace';
+        t.dataset.variant = on ? '' : 'outline';
+        s.dataset.variant = on ? 'outline' : '';
+        t.disabled = !hasShareGps();
+        t.style.opacity = hasShareGps() ? '' : '0.5';
+      }
+
+      function setShareVariant(v) {
+        if (v === 'trace' && !hasShareGps()) return;
+        shareVariant = v;
+        shareTabs();
+        renderShare();
+      }
 
       function drawShareImage(cv, P, logo) {
         const W = 1080, H = 1920, MG = 72, T = 300, B = 1380;
@@ -1627,13 +1700,14 @@ if ($p === 'activity') {
       }
 
       async function openShare() {
-        if (!window.trqGps || !window.trqGps.pts || window.trqGps.pts.length < 2) {
+        if (!hasShareGps()) {
           try { const j = await call('fetch_gps', {id: <?= json_encode($a['id']) ?>}); if (j && j.gps && j.gps.pts && j.gps.pts.length >= 2) window.trqGps = j.gps; } catch (e) { }
         }
-        const g = window.trqGps;
-        if (!g || !g.pts || g.pts.length < 2) { alert('Aucun tracé GPS disponible pour cette séance.'); return; }
         loadShareLogo().then(logo => {
-          drawShareImage(document.getElementById('sharePreview'), g.pts, logo);
+          window.__shareLogo = logo;
+          shareVariant = hasShareGps() ? 'trace' : 'stats';
+          shareTabs();
+          renderShare();
           document.getElementById('modal-share').showModal();
         });
       }
@@ -1644,7 +1718,8 @@ if ($p === 'activity') {
           if (!b) return;
           const u = URL.createObjectURL(b);
           const a = document.createElement('a');
-          a.href = u; a.download = SHARE_META.file;
+          a.href = u;
+          a.download = (shareVariant === 'trace' ? 'trq-seance-' : 'trq-stats-') + SHARE_META.file + '.png';
           document.body.appendChild(a); a.click(); a.remove();
           setTimeout(() => URL.revokeObjectURL(u), 4000);
         }, 'image/png');
