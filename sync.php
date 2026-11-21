@@ -33,7 +33,7 @@ try {
                 name=excluded.name, duration=excluded.duration, distance=excluded.distance, elev=excluded.elev,
                 avg_hr=excluded.avg_hr, max_hr=excluded.max_hr, avg_speed=excluded.avg_speed,
                 avg_w=excluded.avg_w, icu_load=excluded.icu_load,
-                tss=CASE WHEN activities.tss_type='load' THEN excluded.icu_load ELSE activities.tss END');
+                tss=CASE WHEN activities.tss_type=\'load\' THEN excluded.icu_load ELSE activities.tss END');
         $known = [];
         foreach ($pdo->query('SELECT id FROM activities')->fetchAll(PDO::FETCH_COLUMN) as $kid) $known[$kid] = true;
         
