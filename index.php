@@ -1906,13 +1906,19 @@ if ($p === 'activity') {
           <section class="space-y-4 p-4">
             <?php if ($pc['summary']): ?><p class="text-sm font-medium"><?= h($pc['summary']) ?></p><?php endif; ?>
             <?php if ($pc['note']): ?><p class="text-xs text-muted-foreground"><?= h($pc['note']) ?></p><?php endif; ?>
+            <?php $qDur = $pc['dur']['planned'] > 0 ? $pc['dur']['actual'] / $pc['dur']['planned'] : null;
+                  $qTss = $pc['tss']['planned'] > 0 ? $pc['tss']['actual'] / $pc['tss']['planned'] : null;
+                  $dDisp = function ($q, float $lo, float $hi, ?int $score) use ($pctOf) {
+                      if ($q === null || ($q >= $lo && $q <= $hi)) return $pctOf($score);
+                      return ($q > 1 ? '+' : '−') . round(abs($q - 1) * 100) . '%';
+                  }; ?>
             <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <?php foreach ([['Respect des cibles', $pc['parts']['structure'], $pc['parts']['structure'] === null ? 'non évalué' : 'étape par étape'],
-                              ['Durée', $pc['parts']['duration'], fmt_dur((int)$pc['dur']['planned']) . ' → ' . fmt_dur((int)$pc['dur']['actual'])],
-                              ['Charge (TSS)', $pc['parts']['load'], round($pc['tss']['planned']) . ' → ' . round($pc['tss']['actual'])]] as [$lbl, $val, $sub]): ?>
+              <?php foreach ([['Respect des cibles', $pc['parts']['structure'], $pctOf($pc['parts']['structure']), $pc['parts']['structure'] === null ? 'non évalué' : 'étape par étape'],
+                              ['Durée', $pc['parts']['duration'], $dDisp($qDur, 0.95, 1.10, $pc['parts']['duration']), fmt_dur((int)$pc['dur']['planned']) . ' → ' . fmt_dur((int)$pc['dur']['actual'])],
+                              ['Charge (TSS)', $pc['parts']['load'], $dDisp($qTss, 0.9, 1.1, $pc['parts']['load']), round($pc['tss']['planned']) . ' → ' . round($pc['tss']['actual'])]] as [$lbl, $val, $disp, $sub]): ?>
                 <div class="rounded-lg border p-3">
                   <p class="text-[10px] uppercase tracking-wide text-muted-foreground"><?= $lbl ?></p>
-                  <p class="text-xl font-semibold tabular-nums"><?= $pctOf($val) ?></p>
+                  <p class="text-xl font-semibold tabular-nums"><?= $disp ?></p>
                   <div class="my-1 h-1.5 overflow-hidden rounded-full bg-muted"><div class="h-full rounded-full" style="width:<?= (int)($val ?? 0) ?>%;background:<?= $barCol($val) ?>"></div></div>
                   <p class="text-[11px] text-muted-foreground tabular-nums"><?= h($sub) ?></p>
                 </div>
@@ -1920,7 +1926,9 @@ if ($p === 'activity') {
               <div class="rounded-lg border p-3">
                 <p class="text-[10px] uppercase tracking-wide text-muted-foreground">Départ</p>
                 <p class="text-xl font-semibold tabular-nums"><?= $pc['chart'] ? ($pc['offset'] >= 0 ? '+' : '−') . fmt_dur(abs((int)$pc['offset'])) : '–' ?></p>
-                <p class="mt-1 text-[11px] text-muted-foreground"><?= $pc['mode'] === 'hr' ? 'décalage détecté (latence FC incluse)' : 'décalage détecté avec le plan' ?></p>
+                <p class="mt-1 text-[11px] text-muted-foreground"><?= $pc['offset'] === 0
+                  ? ($pc['mode'] === 'hr' ? 'départ aligné (latence FC incluse)' : 'départ aligné sur le plan')
+                  : ($pc['mode'] === 'hr' ? 'décalage détecté (latence FC incluse)' : 'décalage détecté avec le plan') ?></p>
               </div>
             </div>
             <?php if ($pc['chart']): ?>

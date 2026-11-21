@@ -1042,6 +1042,10 @@ function trq_i18n(): array {
     'Repos / récupération' => 'Rest / recovery',
     'générique (hors Table 2)' => 'generic (outside Table 2)',
     'Cibles glucidiques, hydratation et énergie calculées à partir de vos séances réalisées · ' => 'Carb, hydration and energy targets computed from your completed workouts · ',
+    'Respect des cibles' => 'Target compliance',
+    'Charge (TSS)' => 'Load (TSS)',
+    'départ aligné (latence FC incluse)' => 'start aligned (HR lag included)',
+    'départ aligné sur le plan' => 'start aligned with plan',
     ];
     return $d;
 }
