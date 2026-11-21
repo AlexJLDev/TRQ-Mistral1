@@ -144,17 +144,19 @@ try {
         echo json_encode(['ok' => true]);
 
     } elseif ($action === 'activity_resync') {
-        // Re-force la synchro d'UNE séance : flux + tours remis à zéro puis retraités immédiatement depuis intervals.icu
+        // Re-force la synchro d'UNE séance : flux + tours remis à zéro puis retraités immédiatement depuis intervals.icu.
+        // Les erreurs (DNS, clé API, 404, 429…) remontent à l'UI au lieu d'être avalées, sinon la séance reste vide sans explication.
         $rid = (string)($_POST['id'] ?? '');
         if ($rid === '') throw new RuntimeException('Activité introuvable.');
         db()->prepare('UPDATE activities SET synced=0, streams=NULL, laps=NULL WHERE id=?')->execute([$rid]);
-        try {
-            $st = db()->prepare('SELECT * FROM activities WHERE id=?');
-            $st->execute([$rid]);
-            $r = $st->fetch();
-            if (!$r) throw new RuntimeException('Activité introuvable.');
-            process_activity($r);
-        } catch (Throwable $e) { error_log('activity_resync: ' . $e->getMessage() . ' @ ' . basename($e->getFile()) . ':' . $e->getLine()); }
+        $st = db()->prepare('SELECT * FROM activities WHERE id=?');
+        $st->execute([$rid]);
+        $r = $st->fetch();
+        if (!$r) throw new RuntimeException('Activité introuvable.');
+        process_activity($r);
+        $chk = db()->prepare('SELECT streams IS NOT NULL AND synced=1 FROM activities WHERE id=?');
+        $chk->execute([$rid]);
+        if (!$chk->fetchColumn()) throw new RuntimeException('Aucun flux récupéré depuis intervals.icu pour cette séance (séance sans données, clé API ou ID athlète invalide). Vérifie les réglages puis réessaie.');
         echo json_encode(['ok' => true]);
 
     } elseif ($action === 'week_goals_set') {
