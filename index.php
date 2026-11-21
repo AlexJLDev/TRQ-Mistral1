@@ -1475,6 +1475,12 @@ if ($p === 'activity') {
           </div>
         </div>
         <div class="flex items-center gap-2">
+          <?php if ($showMap): ?>
+          <button type="button" class="btn" data-variant="outline" data-size="sm" aria-label="Exporter une image de partage (tracé, km, temps, TSS, D+)" title="Exporter une image de partage (tracé, km, temps, TSS, D+)" onclick="openShare()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/></svg>
+            Partager
+          </button>
+          <?php endif; ?>
           <button type="button" id="actResyncBtn" class="btn" data-variant="outline" data-size="sm" aria-label="Resynchroniser cette séance depuis intervals.icu" title="Resynchroniser cette séance depuis intervals.icu (flux, tours, pics)" onclick="actResync(this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
             Resynchroniser
@@ -1515,6 +1521,146 @@ if ($p === 'activity') {
           actCancelName();
         } catch (e) { alert(e.message); }
       }
+      </script>
+
+      <dialog class="dialog" id="modal-share"
+              onpointerdown="this.dataset.backdropPress = event.target === this"
+              onclick="if (event.target === this && this.dataset.backdropPress === 'true') this.close()">
+        <div class="sm:max-w-md w-full">
+          <header class="flex items-center justify-between pb-3 border-b mb-4">
+            <div>
+              <h3 class="text-base font-semibold">Partager la séance</h3>
+              <p class="text-xs text-muted-foreground">PNG 1080×1920 · fond transparent · tracé + KM / Temps / TSS / D+</p>
+            </div>
+            <button type="button" class="btn" data-variant="ghost" data-size="icon-sm" aria-label="Fermer" onclick="document.getElementById('modal-share').close()">
+              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </header>
+          <div class="rounded-lg border p-3 flex justify-center" style="background:#26262b">
+            <canvas id="sharePreview" width="1080" height="1920" class="max-w-full h-auto rounded" style="max-height:56vh"></canvas>
+          </div>
+          <div class="flex justify-end gap-2 mt-4">
+            <button type="button" class="btn" data-variant="outline" onclick="document.getElementById('modal-share').close()">Fermer</button>
+            <button type="button" class="btn" id="shareDownloadBtn">Télécharger PNG</button>
+          </div>
+        </div>
+      </dialog>
+
+      <script>
+      const SHARE_META = {
+        name: <?= json_encode($a['name'] ?: $a['type']) ?>,
+        date: <?= json_encode(date('d/m/Y', strtotime($a['date']))) ?>,
+        km: <?= json_encode($a['distance'] !== null && $a['distance'] !== '' ? n(floatval($a['distance']) / 1000, 1) : '—') ?>,
+        tps: <?= json_encode(fmt_dur((int)$a['duration'])) ?>,
+        tss: <?= json_encode($a['tss'] !== null && $a['tss'] !== '' ? n(floatval($a['tss']), 0) : '—') ?>,
+        dp: <?= json_encode(($a['elev'] !== null && $a['elev'] !== '') ? n(floatval($a['elev']), 0) . ' m' : '—') ?>,
+        file: <?= json_encode('trq-seance-' . preg_replace('/[^A-Za-z0-9_-]/', '_', (string)$a['id']) . '.png') ?>
+      };
+
+      function drawShareImage(cv, P, logo) {
+        const W = 1080, H = 1920, MG = 72, T = 300, B = 1380;
+        const F = '"Segoe UI", -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif';
+        cv.width = W; cv.height = H;
+        const ctx = cv.getContext('2d');
+        ctx.clearRect(0, 0, W, H);
+        const lat0 = P.reduce((s, p) => s + p[0], 0) / P.length, k = Math.cos(lat0 * Math.PI / 180);
+        let minX = 1e99, maxX = -1e99, minY = 1e99, maxY = -1e99;
+        const pts = P.map(p => { const x = p[1] * k, y = -p[0]; if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; return [x, y]; });
+        const extX = (maxX - minX) || 1e-6, extY = (maxY - minY) || 1e-6;
+        const availW = W - 2 * MG, availH = B - T;
+        const s = Math.min(availW / extX, availH / extY);
+        const ox = (availW - extX * s) / 2, oy = (availH - extY * s) / 2;
+        const off = document.createElement('canvas'); off.width = W; off.height = H;
+        const o = off.getContext('2d');
+        o.lineJoin = 'round'; o.lineCap = 'round';
+        o.beginPath();
+        pts.forEach((p, i) => { const X = MG + (p[0] - minX) * s + ox, Y = T + (p[1] - minY) * s + oy; if (i) o.lineTo(X, Y); else o.moveTo(X, Y); });
+        o.strokeStyle = '#fff'; o.lineWidth = 13; o.stroke();
+        o.globalCompositeOperation = 'source-in';
+        o.fillStyle = 'rgba(255,255,255,0.78)'; o.fillRect(0, 0, W, H);
+        ctx.drawImage(off, 0, 0);
+        let fs = 46;
+        do { ctx.font = '600 ' + fs + 'px ' + F; fs--; } while (ctx.measureText(SHARE_META.name).width > availW && fs > 24);
+        ctx.fillStyle = 'rgba(255,255,255,0.88)';
+        ctx.fillText(SHARE_META.name, MG, 150);
+        ctx.font = '400 28px ' + F;
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.fillText(SHARE_META.date, MG, 196);
+        ctx.fillStyle = 'rgba(255,255,255,0.18)';
+        ctx.fillRect(MG, 1520, availW, 2);
+        const cols = [[SHARE_META.km, 'KM'], [SHARE_META.tps, 'TEMPS'], [SHARE_META.tss, 'TSS'], [SHARE_META.dp, 'D+']];
+        const colW = availW / 4;
+        cols.forEach(([v, l], i) => {
+          const x = MG + i * colW;
+          let vs = 54;
+          do { ctx.font = '700 ' + vs + 'px ' + F; vs--; } while (ctx.measureText(v).width > colW - 10 && vs > 22);
+          ctx.fillStyle = 'rgba(255,255,255,0.85)';
+          ctx.fillText(v, x, 1650);
+          ctx.font = '500 24px ' + F;
+          ctx.fillStyle = 'rgba(255,255,255,0.45)';
+          ctx.fillText(l, x, 1700);
+        });
+        if (logo) {
+          const ls = 72;
+          ctx.globalAlpha = 0.6;
+          ctx.drawImage(logo, W - MG - ls, H - 52 - ls, ls, ls);
+          ctx.globalAlpha = 1;
+        } else {
+          ctx.font = '700 26px ' + F;
+          ctx.fillStyle = 'rgba(255,255,255,0.35)';
+          ctx.fillText('TRQ', W - MG - ctx.measureText('TRQ').width, H - 60);
+        }
+      }
+
+      function loadShareLogo() {
+        if (window.__shareLogo !== undefined) return Promise.resolve(window.__shareLogo);
+        const tryOne = src => new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = src; });
+        return tryOne('assets/logo-512.png').then(i => i || tryOne('assets/logo-192.png')).then(img => {
+          window.__shareLogo = null;
+          if (img) {
+            try {
+              const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+              const x = c.getContext('2d', {willReadFrequently: true});
+              x.drawImage(img, 0, 0);
+              const d = x.getImageData(0, 0, c.width, c.height), a = d.data;
+              const bgLum = 0.299 * a[8] + 0.587 * a[9] + 0.114 * a[10];
+              for (let i = 0; i < a.length; i += 4) {
+                const l = 0.299 * a[i] + 0.587 * a[i + 1] + 0.114 * a[i + 2];
+                const t = Math.max(0, Math.min(1, (l - bgLum) / (255 - bgLum)));
+                a[i] = a[i + 1] = a[i + 2] = 255;
+                a[i + 3] = Math.round(t * 255);
+              }
+              x.putImageData(d, 0, 0);
+              window.__shareLogo = c;
+            } catch (e) { window.__shareLogo = img; }
+          }
+          return window.__shareLogo;
+        });
+      }
+
+      async function openShare() {
+        if (!window.trqGps || !window.trqGps.pts || window.trqGps.pts.length < 2) {
+          try { const j = await call('fetch_gps', {id: <?= json_encode($a['id']) ?>}); if (j && j.gps && j.gps.pts && j.gps.pts.length >= 2) window.trqGps = j.gps; } catch (e) { }
+        }
+        const g = window.trqGps;
+        if (!g || !g.pts || g.pts.length < 2) { alert('Aucun tracé GPS disponible pour cette séance.'); return; }
+        loadShareLogo().then(logo => {
+          drawShareImage(document.getElementById('sharePreview'), g.pts, logo);
+          document.getElementById('modal-share').showModal();
+        });
+      }
+
+      document.getElementById('shareDownloadBtn').addEventListener('click', () => {
+        const cv = document.getElementById('sharePreview');
+        cv.toBlob(b => {
+          if (!b) return;
+          const u = URL.createObjectURL(b);
+          const a = document.createElement('a');
+          a.href = u; a.download = SHARE_META.file;
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(u), 4000);
+        }, 'image/png');
+      });
       </script>
 
       <dialog class="dialog" id="modal-feel"
@@ -3221,7 +3367,7 @@ if ($p === 'activity') {
   }
   function init(g) {
     if (!g || !g.pts || g.pts.length < 2) { card.remove(); return; }
-    G = g; msg.style.display = 'none';
+    G = g; window.trqGps = g; msg.style.display = 'none';
     avail = ['track'].concat(['watts', 'hr', 'speed', 'alt'].filter(k => g[k] && g[k].some(x => x > 0)));
     cur = MAP_IS_RUN && avail.includes('speed') ? 'speed' : avail.includes('watts') ? 'watts' : avail.includes('speed') ? 'speed' : 'track';
     map = L.map(box, {scrollWheelZoom: false});
