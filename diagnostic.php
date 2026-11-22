@@ -32,7 +32,7 @@ function activity_diagnostic(array $a, array $S, array $laps, string $lapSource,
     };
     $f = fn(string $k) => (isset($a[$k]) && $a[$k] !== '') ? (float)$a[$k] : null;
     $dur = (int)($a['duration'] ?? 0);
-    if ($dur < 600) return ['main' => ['level' => 'info', 'text' => 'Sortie très courte (' . dg_dur($dur) . ') : trop brève pour une analyse fiable.'], 'extra' => []];
+    if ($dur < 600) return ['narrative' => '', 'simple' => 'En clair : séance trop courte pour dire grand chose — garde-la au chaud et remets-toi en selle ou en chaussures plus longtemps la prochaine fois.', 'main' => ['level' => 'info', 'text' => 'Sortie très courte (' . dg_dur($dur) . ') : trop brève pour une analyse fiable.'], 'extra' => []];
 
     $sport = (string)($a['sport'] ?? ''); $isRun = $sport === 'run';
     $np = $f('np'); $if = $f('if_'); $vi = $f('vi'); $dec = $f('decoupling'); $tss = $f('tss'); $avgHr = $f('avg_hr'); $cad = $f('cadence');
@@ -236,8 +236,45 @@ function activity_diagnostic(array $a, array $S, array $laps, string $lapSource,
         $narrative = $kind . ($qual ? ' ' . $qual : '') . ' : ' . $wh . ($point ? ', ' . $point : '') . '.';
     }
 
+    /* ---------- 9. Version « en clair » (débutants, sans jargon) ---------- */
+    $simple = '';
+    {
+        // 1. Ce que tu as fait (vocabulaire courant)
+        $pctL = ($avgHr && $lthr > 0) ? (int)round($avgHr / $lthr * 100) : null;
+        if ($hasPower) {
+            $what = $structured ? 'tu as fait une série d’efforts intenses avec des pauses entre chaque'
+                : ($pctFtp <= 60 ? 'tu as bougé tranquillement, sans forcer'
+                : ($pctFtp <= 75 ? 'tu as roulé à un rythme confortable qu’on peut tenir longtemps'
+                : ($pctFtp <= 90 ? 'tu as roulé plus vite que le rythme confortable : ça demande un vrai effort'
+                : 'tu as roulé très vite, proche de ton maximum')));
+            if ($pctFtp !== null) $what .= ' (intensité ' . $pctFtp . '% de ta puissance de référence)';
+        } elseif ($isRun && $km > 0) {
+            $what = 'tu as couru ' . dg_n($km, 1) . ' km en ' . dg_dur($dur)
+                . ($pctL === null ? '' : ($pctL <= 72 ? ' tranquillement (très bon rythme pour progresser en endurance)'
+                : ($pctL <= 85 ? ' à un rythme soutenu' : ' rapidement, proche de ta limite')));
+        } elseif ($avgHr) {
+            $what = 'tu as bougé ' . dg_dur($dur) . ($pctL === null ? '' : ($pctL <= 72 ? ' tranquillement' : ($pctL <= 85 ? ' à un rythme soutenu' : ' rapidement')));
+        } else {
+            $what = 'tu as bougé ' . dg_dur($dur);
+        }
+        // 2. Comment ça s’est passé (lu sur les règles existantes)
+        $goodN = count(array_filter($ins, fn($i) => $i['level'] === 'good'));
+        $warnN = count(array_filter($ins, fn($i) => $i['level'] === 'warn'));
+        $how = isset($ins['record']) ? 'tu as battu un de tes records, chapeau !'
+            : ($warnN > 0 ? 'des signes de fatigue sont apparus en fin de séance — c’est normal sur ce type d’effort, mais ne les ignore pas'
+            : ($goodN > 0 ? 'tout s’est bien passé du début à la fin, très propre' : 'rien d’anormal à signaler'));
+        // 3. Ce qu’il faut faire ensuite
+        $next = $tss === null ? ''
+            : ($tss < 40 ? ' Pas de récupération spéciale nécessaire.'
+            : ($tss < 80 ? ' Une bonne nuit de sommeil suffit pour récupérer.'
+            : ($tss < 150 ? ' Bois et mange dans l’heure qui suit, et garde une journée tranquille demain si possible.'
+            : ($tss < 250 ? ' Demain, privilégie le repos ou une sortie très légère.'
+            : ' Accorde-toi deux jours faciles : ton corps a besoin de récupérer.'))));
+        $simple = 'En clair : ' . $what . '. ' . ucfirst($how) . '.' . ($next);
+    }
+
     uasort($ins, fn($x, $y) => $y['p'] <=> $x['p']);
     $list = array_values($ins);
     $main = array_shift($list);
-    return ['narrative' => $narrative, 'main' => ['level' => $main['level'], 'text' => $main['text']], 'extra' => array_map(fn($i) => ['level' => $i['level'], 'text' => $i['text']], array_slice($list, 0, 3))];
+    return ['narrative' => $narrative, 'simple' => $simple, 'main' => ['level' => $main['level'], 'text' => $main['text']], 'extra' => array_map(fn($i) => ['level' => $i['level'], 'text' => $i['text']], array_slice($list, 0, 3))];
 }
