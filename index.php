@@ -203,6 +203,7 @@ function readiness_badge(?float $score): string {
 }
 
 function head(string $title, string $active): void {
+    global $notifUnread, $nNotifs;             // badge notifs rendu côté serveur (sinon null dans cette fonction)
     $nav = [
         'dashboard' => [t('Tableau de bord'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>'],
         'activities' => [t('Activités'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>'],
@@ -871,6 +872,7 @@ if (notifReadAll) notifReadAll.onclick = async (e) => { e.stopPropagation(); try
 NOTIF_NS.badge(<?= (int)$notifUnread ?>);
 NOTIF_NS.render(NOTIF0 || []);
 { const top = (NOTIF0 || [])[0]; if (top) NOTIF_NS.maxSeen = top.id; }
+NOTIF_NS.refresh(false);                                   // recalcul immédiat du badge à l'ouverture
 setInterval(() => NOTIF_NS.refresh(true), 60000);
 
 async function pushPlanned(id) {
