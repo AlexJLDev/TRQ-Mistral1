@@ -201,8 +201,43 @@ function activity_diagnostic(array $a, array $S, array $laps, string $lapSource,
         $add('load', 10, 'info', 'Séance de ' . dg_dur($dur) . ($km > 0 ? ' sur ' . dg_n($km, 1) . ' km' : '') . ' : pas assez de données de puissance ou de fréquence cardiaque pour un diagnostic détaillé.');
     }
 
+    /* ---------- 8. Résumé narratif (style coach, une relecture de la séance) ---------- */
+    $narrative = '';
+    {
+        if ($hasPower)       $wh = dg_n($np, 0) . ' W sur ' . dg_dur($dur) . ' (IF ' . dg_n($np / $ftp, 2) . ')';
+        elseif ($isRun && $km > 0) $wh = dg_n($km, 1) . ' km en ' . dg_dur($dur) . ' (' . dg_pace($km / ($dur / 3600)) . ')';
+        elseif ($avgHr)      $wh = dg_dur($dur) . ' à ' . (int)round($avgHr) . ' bpm';
+        else                 $wh = dg_dur($dur);
+        $lv = fn(string $topic) => isset($ins[$topic]) ? $ins[$topic]['level'] : null;
+        $kind = $structured ? 'Séance de travail structuré'
+            : ($tss === null ? 'Séance'
+            : ($tss < 40 ? 'Sortie de récupération'
+            : ($tss < 150 ? 'Sortie endurance' : ($tss < 250 ? 'Grosse sortie' : 'Sortie très éprouvante'))));
+        // adjectif de force selon l'intensité et la durée
+        $qual = '';
+        if (!$structured) {
+            if ($tss !== null && $tss < 40)                        $qual = 'facile';
+            elseif ($lv('drift') === 'good')                       $qual = 'solide';
+        }
+        // un enseignement repéré par le diagnostic (max 1)
+        $point = '';
+        if ($lv('record') === 'good')          $point = 'un nouveau record vient d’être signé';
+        elseif ($lv('intervals') !== null && $structured === true)
+            $point = $lv('intervals') === 'good' ? 'efforts parfaitement réguliers'
+                : ($lv('intervals') === 'info' ? 'un léger essoufflement sur les derniers intervalles'
+                : 'intensité de départ trop haute — des intervalles lâchés en fin de séance');
+        elseif ($lv('drift') === 'good')       $point = 'dérive cardiaque maîtrisée — construction progressive de la capacité aérobie';
+        elseif ($lv('drift') === 'warn')       $point = 'dérive cardiaque à surveiller : le cœur travaille plus pour le même effort';
+        elseif ($lv('zones') === 'warn')       $point = 'beaucoup de temps en zone 3 — mieux vaut polariser endurance douce et intervalles francs';
+        elseif ($lv('fatigue') === 'good')     $point = 'excellente résistance à la fatigue sur la fin de sortie';
+        elseif ($lv('fatigue') === 'warn')     $point = 'grosse fatigue en fin de sortie — nourris et hydrate davantage sur ce format';
+        elseif ($lv('pace') === 'warn')        $point = 'l’allure s’essouffle sur la fin — pars un ton en dessous';
+        elseif ($lv('pace') === 'good')        $point = 'allure parfaitement gérée du début à la fin';
+        $narrative = $kind . ($qual ? ' ' . $qual : '') . ' : ' . $wh . ($point ? ', ' . $point : '') . '.';
+    }
+
     uasort($ins, fn($x, $y) => $y['p'] <=> $x['p']);
     $list = array_values($ins);
     $main = array_shift($list);
-    return ['main' => ['level' => $main['level'], 'text' => $main['text']], 'extra' => array_map(fn($i) => ['level' => $i['level'], 'text' => $i['text']], array_slice($list, 0, 3))];
+    return ['narrative' => $narrative, 'main' => ['level' => $main['level'], 'text' => $main['text']], 'extra' => array_map(fn($i) => ['level' => $i['level'], 'text' => $i['text']], array_slice($list, 0, 3))];
 }

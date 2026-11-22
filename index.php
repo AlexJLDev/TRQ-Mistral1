@@ -2037,6 +2037,9 @@ if ($p === 'activity') {
               <span class="inline-block size-2 rounded-full" style="background:<?= $dgColor ?>"></span> Diagnostic automatique
             </div>
             <p class="mt-1.5 text-base font-medium leading-snug"><?= h($diag['main']['text']) ?></p>
+            <?php if (!empty($diag['narrative'])): ?>
+              <p class="mt-2 border-l-2 pl-3 text-sm leading-relaxed text-muted-foreground" style="border-color:<?= $dgColor ?>"><?= h($diag['narrative']) ?></p>
+            <?php endif; ?>
             <?php if (!empty($diag['extra'])): ?>
               <details class="mt-3 group">
                 <summary class="cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground"><?= count($diag['extra']) ?> autre<?= count($diag['extra']) > 1 ? 's' : '' ?> observation<?= count($diag['extra']) > 1 ? 's' : '' ?></summary>
