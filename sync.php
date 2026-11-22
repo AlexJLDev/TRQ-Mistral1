@@ -61,6 +61,8 @@ try {
         }
         $pdo->commit();
         $rem = (int)$pdo->query('SELECT COUNT(*) FROM activities WHERE synced=0')->fetchColumn();
+        if ($created > 0) notif_add('sync', 'sync-' . uniqid(), t('Nouvelles séances synchronisées'),
+            sprintf(t('%d nouvelle(s) séance(s) importée(s) depuis intervals.icu.'), $created), '?p=activities', 'good');
         echo json_encode(['ok' => true, 'found' => $n, 'created' => $created, 'remaining' => $rem]);
 
     } elseif ($action === 'process') {
@@ -251,6 +253,17 @@ try {
         else auth_delete_user($id);
         echo json_encode(['ok' => true]);
 
+    } elseif ($action === 'notif_list') {
+        echo json_encode(['ok' => true, 'items' => notif_latest(40), 'unread' => notif_unread()]);
+
+    } elseif ($action === 'notif_read') {
+        notif_read_id((int)($_POST['id'] ?? 0));
+        echo json_encode(['ok' => true, 'unread' => notif_unread()]);
+
+    } elseif ($action === 'notif_read_all') {
+        notif_read_all();
+        echo json_encode(['ok' => true, 'unread' => notif_unread()]);
+
     } elseif ($action === 'icu_test') {
         $a = icu_get('/athlete/' . athlete_id());
         echo json_encode(['ok' => true, 'name' => (string)($a['name'] ?? ($a['firstname'] ?? 'athlète')), 'ssl_verify' => cfg('ssl_verify', '1') !== '0']);
@@ -279,5 +292,8 @@ try {
     }
 } catch (Throwable $e) {
     http_response_code(500);
+    try {
+        notif_add('sync_err', 'syncerr-' . uniqid(), t('Échec de synchronisation'), $e->getMessage(), '?p=settings', 'crit');
+    } catch (Throwable $e2) {}
     echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
 }

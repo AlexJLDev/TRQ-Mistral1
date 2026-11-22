@@ -116,6 +116,20 @@ function db(): PDO {
             structure TEXT, profile TEXT, duration INTEGER DEFAULT 0, tss REAL DEFAULT 0, if_ REAL,
             notes TEXT, created_at TEXT, updated_at TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS notifications(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER,
+            type TEXT,
+            ref TEXT,
+            level TEXT DEFAULT 'info',
+            title TEXT,
+            body TEXT,
+            link TEXT,
+            read_at INTEGER
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_notif_ref ON notifications(type, ref);
+        CREATE INDEX IF NOT EXISTS idx_notif_ts ON notifications(ts);
         ");
 
         // Assurer la présence des colonnes optionnelles si table préexistante
@@ -1752,6 +1766,117 @@ function fmt_dur_full(int $s): string {
 }
 function fmt_label(int $s): string {
     return $s < 60 ? "{$s}s" : ($s < 3600 ? intdiv($s, 60) . 'min' : round($s / 3600, 1) . 'h');
+}
+
+/* ---------- Notifications in-app ---------- */
+
+/** Ajoute (ou restimule) une notification — dédoublonnée par (type, ref). */
+function notif_add(string $type, string $ref, string $title, string $body = '', string $link = '', string $level = 'info'): void {
+    db()->prepare('INSERT INTO notifications(ts, type, ref, level, title, body, link, read_at)
+        VALUES (?,?,?,?,?,?,?,NULL)
+        ON CONFLICT(type, ref) DO UPDATE SET
+            ts = excluded.ts, level = excluded.level, title = excluded.title,
+            body = excluded.body, link = excluded.link, read_at = NULL')
+        ->execute([time(), $type, $ref, $level, $title, $body, $link]);
+}
+
+function notif_latest(int $limit = 40): array {
+    return db()->query('SELECT id, ts, type, level, title, body, link, read_at FROM notifications ORDER BY ts DESC, id DESC LIMIT ' . max(1, min(200, $limit)))->fetchAll();
+}
+
+function notif_unread(): int {
+    return (int)db()->query('SELECT COUNT(*) FROM notifications WHERE read_at IS NULL')->fetchColumn();
+}
+
+function notif_read_id(int $id): void {
+    db()->prepare('UPDATE notifications SET read_at = ' . time() . ' WHERE id = ? AND read_at IS NULL')->execute([max(0, $id)]);
+}
+
+function notif_read_all(): void {
+    db()->exec('UPDATE notifications SET read_at = ' . time() . ' WHERE read_at IS NULL');
+}
+
+/** Purge des notifications de plus de 6 mois. */
+function notif_gc(): void {
+    db()->exec('DELETE FROM notifications WHERE ts < ' . (time() - 182 * 86400));
+}
+
+/** Libellé humain d'une durée de meilleur effort (5 → 5 s, 300 → 5 min, 1200 → 20 min). */
+function notif_dur_label(int $s): string {
+    return $s < 60 ? sprintf(t('%d s'), $s) : sprintf(t('%d min'), intdiv($s, 60));
+}
+
+/** Génère les notifications d'analyse (alertes, objectifs, records, rappels) — throttlé 30 min via cfg(notif_gen). */
+function notif_generate(): void {
+    if (time() - (int)cfg('notif_gen', 0) < 1800) return;
+    cfg_set('notif_gen', (string)time());
+    try { notif_gc(); } catch (Throwable $e) {}
+
+    /* 1. Alertes de surmenage (progress_lib) — refé/Data du jour pour permettre une réévaluation quotidienne */
+    try {
+        foreach (progress_alerts() as $a) {
+            $lvl = ($a['sev'] ?? 'info') === 'bad' ? 'crit' : (($a['sev'] ?? 'info') === 'warn' ? 'warn' : 'info');
+            notif_add('alert', 'alert-' . $lvl . '-' . md5((string)$a['title']) . '-' . date('Ymd'), (string)t($a['title']), (string)t($a['msg']), '?p=progress&alert=1', $lvl);
+        }
+    } catch (Throwable $e) {}
+
+    /* 2. Objectifs hebdomadaires : atteint / en retard */
+    try {
+        $gs = progress_goal_status();
+        if (!empty($gs['goals_set']) && $gs['goal_tss'] > 0) {
+            $pct = $gs['total_tss'] / $gs['goal_tss'];
+            if ($pct >= 1) {
+                notif_add('goal', 'goal-done-' . $gs['week_monday'], t('Objectif de la semaine atteint'),
+                    sprintf(t('%s TSS sur %s visés.'), n($gs['total_tss']), n($gs['goal_tss'])), '?p=progress&alert=1', 'good');
+            } elseif ((int)date('N') >= 4 && $pct < 0.55) {
+                notif_add('goal', 'goal-late-' . $gs['week_monday'], t('Objectif de la semaine en retard'),
+                    sprintf(t('%s TSS sur %s visés — prévois une séance pour rester dans la cible.'), n($gs['total_tss']), n($gs['goal_tss'])), '?p=progress&alert=1', 'warn');
+            }
+        }
+    } catch (Throwable $e) {}
+
+    /* 3. Records personnels — compare au snapshot cfg(pr_notif_snap) ; premier passage sans notif */
+    try {
+        $prs = progress_prs();
+        $flat = [];
+        foreach (($prs['pw'] ?? []) as $d => $r) if (($r['val'] ?? 0) > 0) $flat["pw-$d"] = $r;
+        foreach (($prs['hr'] ?? []) as $d => $r) if (($r['val'] ?? 0) > 0) $flat["hr-$d"] = $r;
+        $snap = json_decode((string)cfg('pr_notif_snap', ''), true) ?: [];
+        foreach ($flat as $k => $r) {
+            $old = $snap[$k] ?? null;
+            if (is_array($old) && (float)$r['val'] > (float)($old['val'] ?? 0) + 0.01) {
+                $isPw = str_starts_with($k, 'pw-');
+                $unit = $isPw ? t('W') : t('bpm');
+                notif_add('pr', 'pr-' . $k, t('Nouveau record personnel'),
+                    sprintf(t('%s %s sur %s — %s'), n((float)$r['val']), $unit, notif_dur_label((int)substr($k, 3)), $r['name'] ?: t('Séance')),
+                    '?p=activity&id=' . urlencode((string)($r['act_id'] ?? '')), 'good');
+            }
+            $snap[$k] = ['val' => (float)$r['val']];
+        }
+        if ($flat) cfg_set('pr_notif_snap', json_encode($snap));
+    } catch (Throwable $e) {}
+
+    /* 4. Rappel de séance planifiée (aujourd'hui / demain) */
+    try {
+        $tom = date('Y-m-d', strtotime('+1 day'));
+        $today = date('Y-m-d');
+        $st = db()->prepare("SELECT id, date, title, ROUND(tss) tss FROM planned_workouts WHERE completed=0 AND substr(date,1,10) IN (?, ?) ORDER BY date");
+        $st->execute([$today, $tom]);
+        foreach ($st->fetchAll() as $w) {
+            $when = substr($w['date'], 0, 10) === $today ? t('aujourd\'hui') : t('demain');
+            notif_add('plan', 'plan-' . $w['id'] . '-' . substr($w['date'], 0, 10), t('Séance planifiée'),
+                sprintf(t('%s le %s — %s TSS'), $when, date('d/m', strtotime($w['date'])), n((float)$w['tss'])), '?p=calendar', 'info');
+        }
+    } catch (Throwable $e) {}
+
+    /* 5. Données wellness manquantes (HRV / FC repos jamais synchronisées depuis > 2 jours) */
+    try {
+        $last = db()->query("SELECT MAX(date) FROM wellness WHERE hrv IS NOT NULL OR resting_hr IS NOT NULL")->fetchColumn();
+        if (!$last || strtotime(substr((string)$last, 0, 10)) < strtotime('-2 days')) {
+            notif_add('well', 'well-missing-' . date('Y-m-d'), t('Données de récupération manquantes'),
+                t('HRV / FC repos non synchronisés depuis plus de 2 jours — vérifie la connexion wellness (intervals.icu).'), '?p=wellness', 'info');
+        }
+    } catch (Throwable $e) {}
 }
 
 /* ---------- i18n : filtre de sortie traduit le HTML des pages (index, login) ---------- */

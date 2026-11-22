@@ -7,6 +7,15 @@ ob_start('csrf_inject_cb');                  // ajoute le jeton CSRF à tous les
 $p = $_GET['p'] ?? 'dashboard';
 $pdo = db();
 
+/* ---------- Notifications in-app : génération throttlée (30 min) des alertes/objectifs/records/rappels ---------- */
+if ($p !== 'avatar') {
+    try { notif_generate(); } catch (Throwable $e) {}
+    $notifUnread = notif_unread();
+} else {
+    $notifUnread = 0;
+}
+$nNotifs = ($p !== 'avatar') ? notif_latest(40) : [];
+
 /* ---------- Photo de profil servie depuis auth.sqlite ---------- */
 if ($p === 'avatar') {
     $st = auth_db()->prepare('SELECT avatar, avatar_mime FROM users WHERE id=?');
@@ -500,6 +509,19 @@ $groups = [
       <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
       <span class="hidden sm:inline">Synchroniser</span>
     </button>
+    <div class="relative" id="notifWrap">
+      <button class="btn relative" data-variant="ghost" data-size="icon-sm" id="notifBtn" aria-label="Notifications">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+        <span id="notifBadge" class="<?= $notifUnread > 0 ? '' : 'hidden' ?> absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white"><?= $notifUnread > 0 ? $notifUnread : '' ?></span>
+      </button>
+      <div id="notifPanel" class="hidden absolute right-0 top-full z-40 mt-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border bg-popover shadow-lg">
+        <div class="flex items-center justify-between border-b px-3 py-2">
+          <span class="text-sm font-semibold"><?= h(t('Notifications')) ?></span>
+          <button type="button" id="notifReadAll" class="text-xs text-muted-foreground hover:underline"><?= h(t('Tout marquer lu')) ?></button>
+        </div>
+        <div id="notifList" class="max-h-80 overflow-y-auto"></div>
+      </div>
+    </div>
     <button class="btn" data-variant="ghost" data-size="icon-sm" id="themeBtn" aria-label="Basculer thème">
       <svg class="w-4 h-4 dark:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
       <svg class="w-4 h-4 hidden dark:block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2m-7.07-14.07 1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32 1.41-1.41"/></svg>
@@ -753,6 +775,103 @@ document.getElementById('themeBtn').onclick = () => {
     localStorage.theme = isDark ? 'dark' : 'light';
     location.reload();
 };
+
+/* ---------- Notifications in-app : cloche, panneau, badge, toasts ---------- */
+const NOTIF0 = <?= json_encode($nNotifs, JSON_UNESCAPED_UNICODE) ?>;
+const NOTIF_NS = {
+    items: (NOTIF0) ? NOTIF0 : [],
+    maxSeen: 0,
+    lvlCol: {good: 'bg-emerald-500', info: 'bg-sky-500', warn: 'bg-amber-500', crit: 'bg-red-500'},
+    fmtAgo(ts) {
+        const en = document.documentElement.lang === 'en';
+        let d = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+        if (d < 60) return en ? 'just now' : 'à l’instant';
+        if (d < 3600) { const m = Math.floor(d / 60); return en ? m + ' min ago' : 'il y a ' + m + ' min'; }
+        if (d < 86400) { const h = Math.floor(d / 3600); return en ? h + 'h ago' : 'il y a ' + h + ' h'; }
+        const j = Math.floor(d / 86400); return en ? j + (j > 1 ? ' days ago' : ' day ago') : 'il y a ' + j + ' j';
+    },
+    render(list) {
+        this.items = list;
+        const box = document.getElementById('notifList');
+        if (!box) return;
+        if (!list.length) { box.innerHTML = '<p class="px-3 py-6 text-center text-xs text-muted-foreground">' + (document.documentElement.lang === 'en' ? 'No notifications' : 'Aucune notification') + '</p>'; }
+        else {
+            box.innerHTML = '';
+            for (const n of list) {
+                const col = this.lvlCol[n.level] || this.lvlCol.info;
+                const el = document.createElement('button');
+                el.type = 'button';
+                el.className = 'block w-full border-b px-3 py-2.5 text-left last:border-b-0 hover:bg-muted/60 ' + (n.read_at ? 'opacity-55' : '');
+                el.dataset.nid = n.id;
+                el.innerHTML = '<span class="flex items-start gap-2">'
+                    + '<span class="mt-1 inline-block size-2 shrink-0 rounded-full ' + col + '"></span>'
+                    + '<span class="min-w-0 flex-1">'
+                    + '<span class="flex items-baseline justify-between gap-2"><span class="truncate text-xs font-semibold">' + this.esc(n.title) + '</span>'
+                    + '<span class="shrink-0 text-[10px] text-muted-foreground">' + this.fmtAgo(+n.ts) + '</span></span>'
+                    + (n.body ? '<span class="mt-0.5 block text-[11px] leading-snug text-muted-foreground">' + this.esc(n.body) + '</span>' : '')
+                    + '</span></span>';
+                el.onclick = () => this.open(n);
+                box.appendChild(el);
+            }
+        }
+    },
+    esc(s) { const d = document.createElement('span'); d.textContent = (s ?? '') + ''; return d.innerHTML; },
+    badge(count) {
+        const b = document.getElementById('notifBadge');
+        if (!b) return;
+        if (count > 0) { b.classList.remove('hidden'); b.textContent = count; }
+        else b.classList.add('hidden');
+    },
+    async refresh(announce) {
+        try {
+            const j = await call('notif_list');
+            this.badge(j.unread);
+            const fresh = (j.items || []).filter(n => !n.read_at && n.id > this.maxSeen);
+            this.render(j.items || []);
+            const top = (j.items || [])[0];
+            if (top) this.maxSeen = Math.max(this.maxSeen, top.id);
+            if (announce) for (const n of fresh.slice(0, 3)) this.toast(n);
+        } catch (e) {}
+    },
+    async open(n) {
+        try { if (!n.read_at) { await call('notif_read', {id: n.id}); this.badge(this.badgeCount() - 1); } } catch (e) {}
+        document.getElementById('notifPanel').classList.add('hidden');
+        if (n.link) location.href = n.link;
+        else this.refresh(false);
+    },
+    badgeCount() { const b = document.getElementById('notifBadge'); if (!b || b.classList.contains('hidden')) return 0; return +b.textContent || 0; },
+    toast(n) {
+        let host = document.getElementById('trqToasts');
+        if (!host) {
+            host = document.createElement('div');
+            host.id = 'trqToasts';
+            host.className = 'fixed bottom-4 right-4 z-50 flex w-72 flex-col gap-2';
+            document.body.appendChild(host);
+        }
+        const col = this.lvlCol[n.level] || this.lvlCol.info;
+        const t = document.createElement('div');
+        t.className = 'rounded-lg border bg-popover px-3 py-2 shadow-lg';
+        t.innerHTML = '<span class="flex items-start gap-2"><span class="mt-1 inline-block size-2 shrink-0 rounded-full ' + col + '"></span>'
+            + '<span class="min-w-0 flex-1"><span class="block text-xs font-semibold">' + this.esc(n.title) + '</span>'
+            + (n.body ? '<span class="mt-0.5 block text-[11px] leading-snug text-muted-foreground">' + this.esc(n.body) + '</span>' : '')
+            + '</span></span>';
+        t.onclick = () => { t.remove(); if (n.link) location.href = n.link; };
+        host.appendChild(t);
+        setTimeout(() => t.remove(), 6000);
+    }
+};
+const notifBtn = document.getElementById('notifBtn');
+const notifPanel = document.getElementById('notifPanel');
+if (notifBtn && notifPanel) {
+    notifBtn.onclick = (e) => { e.stopPropagation(); notifPanel.classList.toggle('hidden'); if (!notifPanel.classList.contains('hidden')) NOTIF_NS.refresh(false); };
+    document.addEventListener('click', (e) => { if (!notifPanel.classList.contains('hidden') && !notifPanel.contains(e.target) && e.target !== notifBtn) notifPanel.classList.add('hidden'); });
+}
+const notifReadAll = document.getElementById('notifReadAll');
+if (notifReadAll) notifReadAll.onclick = async (e) => { e.stopPropagation(); try { const j = await call('notif_read_all'); NOTIF_NS.badge(j.unread); NOTIF_NS.refresh(false); } catch (err) {} };
+NOTIF_NS.badge(<?= (int)$notifUnread ?>);
+NOTIF_NS.render(NOTIF0 || []);
+{ const top = (NOTIF0 || [])[0]; if (top) NOTIF_NS.maxSeen = top.id; }
+setInterval(() => NOTIF_NS.refresh(true), 60000);
 
 async function pushPlanned(id) {
   try { await call('plan_push', {id}); location.reload(); } catch (e) { alert(e.message); }
