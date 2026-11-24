@@ -32,7 +32,7 @@ function activity_diagnostic(array $a, array $S, array $laps, string $lapSource,
     };
     $f = fn(string $k) => (isset($a[$k]) && $a[$k] !== '') ? (float)$a[$k] : null;
     $dur = (int)($a['duration'] ?? 0);
-    if ($dur < 600) return ['main' => ['level' => 'info', 'text' => 'Sortie très courte (' . dg_dur($dur) . ') : trop brève pour une analyse fiable.'], 'extra' => []];
+    if ($dur < 600) return ['narrative' => '', 'simple' => 'En clair : séance trop courte pour dire grand chose — garde-la au chaud et remets-toi en selle ou en chaussures plus longtemps la prochaine fois.', 'main' => ['level' => 'info', 'text' => 'Sortie très courte (' . dg_dur($dur) . ') : trop brève pour une analyse fiable.'], 'extra' => []];
 
     $sport = (string)($a['sport'] ?? ''); $isRun = $sport === 'run';
     $np = $f('np'); $if = $f('if_'); $vi = $f('vi'); $dec = $f('decoupling'); $tss = $f('tss'); $avgHr = $f('avg_hr'); $cad = $f('cadence');
@@ -201,8 +201,183 @@ function activity_diagnostic(array $a, array $S, array $laps, string $lapSource,
         $add('load', 10, 'info', 'Séance de ' . dg_dur($dur) . ($km > 0 ? ' sur ' . dg_n($km, 1) . ' km' : '') . ' : pas assez de données de puissance ou de fréquence cardiaque pour un diagnostic détaillé.');
     }
 
+    /* ---------- 8. Résumé narratif (style coach, une relecture de la séance) ---------- */
+    $narrative = '';
+    {
+        if ($hasPower)       $wh = dg_n($np, 0) . ' W sur ' . dg_dur($dur) . ' (IF ' . dg_n($np / $ftp, 2) . ')';
+        elseif ($isRun && $km > 0) $wh = dg_n($km, 1) . ' km en ' . dg_dur($dur) . ' (' . dg_pace($km / ($dur / 3600)) . ')';
+        elseif ($avgHr)      $wh = dg_dur($dur) . ' à ' . (int)round($avgHr) . ' bpm';
+        else                 $wh = dg_dur($dur);
+        $lv = fn(string $topic) => isset($ins[$topic]) ? $ins[$topic]['level'] : null;
+        $kind = $structured ? 'Séance de travail structuré'
+            : ($tss === null ? 'Séance'
+            : ($tss < 40 ? 'Sortie de récupération'
+            : ($tss < 150 ? 'Sortie endurance' : ($tss < 250 ? 'Grosse sortie' : 'Sortie très éprouvante'))));
+        // adjectif de force selon l'intensité et la durée
+        $qual = '';
+        if (!$structured) {
+            if ($tss !== null && $tss < 40)                        $qual = 'facile';
+            elseif ($lv('drift') === 'good')                       $qual = 'solide';
+        }
+        // un enseignement repéré par le diagnostic (max 1)
+        $point = '';
+        if ($lv('record') === 'good')          $point = 'un nouveau record vient d’être signé';
+        elseif ($lv('intervals') !== null && $structured === true)
+            $point = $lv('intervals') === 'good' ? 'efforts parfaitement réguliers'
+                : ($lv('intervals') === 'info' ? 'un léger essoufflement sur les derniers intervalles'
+                : 'intensité de départ trop haute — des intervalles lâchés en fin de séance');
+        elseif ($lv('drift') === 'good')       $point = 'dérive cardiaque maîtrisée — construction progressive de la capacité aérobie';
+        elseif ($lv('drift') === 'warn')       $point = 'dérive cardiaque à surveiller : le cœur travaille plus pour le même effort';
+        elseif ($lv('zones') === 'warn')       $point = 'beaucoup de temps en zone 3 — mieux vaut polariser endurance douce et intervalles francs';
+        elseif ($lv('fatigue') === 'good')     $point = 'excellente résistance à la fatigue sur la fin de sortie';
+        elseif ($lv('fatigue') === 'warn')     $point = 'grosse fatigue en fin de sortie — nourris et hydrate davantage sur ce format';
+        elseif ($lv('pace') === 'warn')        $point = 'l’allure s’essouffle sur la fin — pars un ton en dessous';
+        elseif ($lv('pace') === 'good')        $point = 'allure parfaitement gérée du début à la fin';
+        $narrative = $kind . ($qual ? ' ' . $qual : '') . ' : ' . $wh . ($point ? ', ' . $point : '') . '.';
+    }
+
+    /* ---------- 9. Version « en clair » (débutants, sans jargon) ---------- */
+    $simple = '';
+    {
+        // 1. Ce que tu as fait (vocabulaire courant)
+        $pctL = ($avgHr && $lthr > 0) ? (int)round($avgHr / $lthr * 100) : null;
+        if ($hasPower) {
+            $what = $structured ? 'tu as fait une série d’efforts intenses avec des pauses entre chaque'
+                : ($pctFtp <= 60 ? 'tu as bougé tranquillement, sans forcer'
+                : ($pctFtp <= 75 ? 'tu as roulé à un rythme confortable qu’on peut tenir longtemps'
+                : ($pctFtp <= 90 ? 'tu as roulé plus vite que le rythme confortable : ça demande un vrai effort'
+                : 'tu as roulé très vite, proche de ton maximum')));
+            if ($pctFtp !== null) $what .= ' (intensité ' . $pctFtp . '% de ta puissance de référence)';
+        } elseif ($isRun && $km > 0) {
+            $what = 'tu as couru ' . dg_n($km, 1) . ' km en ' . dg_dur($dur)
+                . ($pctL === null ? '' : ($pctL <= 72 ? ' tranquillement (très bon rythme pour progresser en endurance)'
+                : ($pctL <= 85 ? ' à un rythme soutenu' : ' rapidement, proche de ta limite')));
+        } elseif ($avgHr) {
+            $what = 'tu as bougé ' . dg_dur($dur) . ($pctL === null ? '' : ($pctL <= 72 ? ' tranquillement' : ($pctL <= 85 ? ' à un rythme soutenu' : ' rapidement')));
+        } else {
+            $what = 'tu as bougé ' . dg_dur($dur);
+        }
+        // 2. Comment ça s’est passé (lu sur les règles existantes)
+        $goodN = count(array_filter($ins, fn($i) => $i['level'] === 'good'));
+        $warnN = count(array_filter($ins, fn($i) => $i['level'] === 'warn'));
+        $how = isset($ins['record']) ? 'tu as battu un de tes records, chapeau !'
+            : ($warnN > 0 ? 'des signes de fatigue sont apparus en fin de séance — c’est normal sur ce type d’effort, mais ne les ignore pas'
+            : ($goodN > 0 ? 'tout s’est bien passé du début à la fin, très propre' : 'rien d’anormal à signaler'));
+        // 3. Ce qu’il faut faire ensuite
+        $next = $tss === null ? ''
+            : ($tss < 40 ? ' Pas de récupération spéciale nécessaire.'
+            : ($tss < 80 ? ' Une bonne nuit de sommeil suffit pour récupérer.'
+            : ($tss < 150 ? ' Bois et mange dans l’heure qui suit, et garde une journée tranquille demain si possible.'
+            : ($tss < 250 ? ' Demain, privilégie le repos ou une sortie très légère.'
+            : ' Accorde-toi deux jours faciles : ton corps a besoin de récupérer.'))));
+        $simple = 'En clair : ' . $what . '. ' . ucfirst($how) . '.' . ($next);
+    }
+
     uasort($ins, fn($x, $y) => $y['p'] <=> $x['p']);
     $list = array_values($ins);
     $main = array_shift($list);
-    return ['main' => ['level' => $main['level'], 'text' => $main['text']], 'extra' => array_map(fn($i) => ['level' => $i['level'], 'text' => $i['text']], array_slice($list, 0, 3))];
+    return ['narrative' => $narrative, 'simple' => $simple, 'main' => ['level' => $main['level'], 'text' => $main['text']], 'extra' => array_map(fn($i) => ['level' => $i['level'], 'text' => $i['text']], array_slice($list, 0, 3))];
+}
+
+/* ============================================================
+   Forme du jour (tableau de bord) : lecture en clair de la forme,
+   de la fatigue, de la fraîcheur, de la charge sur 7 jours et de
+   la récupération (HRV, sommeil). Même philosophie que le
+   diagnostic de séance : un texte court style coach + une version
+   « en clair » sans jargon pour débuter.
+   ============================================================ */
+function form_narrative(?string $sport = null): array {
+    $pm = pmc($sport);
+    if (!$pm) return [];
+    $keys = array_keys($pm);
+    $last = $pm[end($keys)];
+    $ctl = (float)$last['ctl']; $atl = (float)$last['atl']; $tsb = (float)$last['tsb'];
+    if ($ctl < 5) return [];                       // historique trop court pour parler de « forme »
+
+    $prevCtl = isset($keys[count($keys) - 8]) ? (float)$pm[$keys[count($keys) - 8]]['ctl'] : $ctl;
+    $ctlDelta = $ctl - $prevCtl;                   // évolution de la forme sur 7 jours
+    $r = $atl > 0 ? $atl / max($ctl, 1) : 0.0;     // fatigue / forme
+
+    $pdo = db();
+    $since = date('Y-m-d', strtotime('-7 days'));
+    $st = $pdo->prepare('SELECT SUM(duration) d, SUM(tss) t, COUNT(*) nb FROM activities WHERE date >= ?' . ($sport ? ' AND sport=?' : ''));
+    $st->execute($sport ? [$since, $sport] : [$since]);
+    $w7 = $st->fetch() ?: [];
+    $tss7 = (int)round((float)($w7['t'] ?? 0));
+    $nb7 = (int)($w7['nb'] ?? 0);
+
+    /* Restitution : HRV des 7 derniers jours vs base des 28 précédents, sommeil récent */
+    $hrv7 = []; $hrvB = []; $sleep7 = [];
+    $i = 0;
+    foreach ($pdo->query('SELECT hrv, sleep_sec FROM wellness WHERE hrv IS NOT NULL OR sleep_sec IS NOT NULL ORDER BY date DESC LIMIT 35') as $w) {
+        if ($w['hrv'] !== null && $w['hrv'] > 0) {
+            if ($i < 7) $hrv7[] = (float)$w['hrv']; elseif (count($hrvB) < 28) $hrvB[] = (float)$w['hrv'];
+        }
+        if ($w['sleep_sec'] !== null && $w['sleep_sec'] > 0 && $i < 7) $sleep7[] = (float)$w['sleep_sec'];
+        $i++;
+    }
+    $hrvAvg = $hrv7 ? round(array_sum($hrv7) / count($hrv7), 1) : null;
+    $hrvBase = $hrvB ? round(array_sum($hrvB) / count($hrvB), 1) : null;
+    $hrvDelta = ($hrvAvg !== null && $hrvBase !== null) ? round($hrvAvg - $hrvBase, 1) : null;
+    $sleepH = $sleep7 ? round(array_sum($sleep7) / count($sleep7) / 3600, 1) : null;
+
+    /* ---------- Phrases (vocabulaire courant, pas de jargon) ---------- */
+    $fatigue = $r > 1.5 ? 'tu portes beaucoup trop de fatigue par rapport à ta forme'
+        : ($r > 1.3 ? 'tu portes pas mal de fatigue : c’est une vraie phase de charge'
+        : ($r > 0.8 ? 'tu portes une fatigue normale d’entraînement'
+        : 'tu récupères : ta fatigue est basse par rapport à ta forme'));
+
+    $fresh = $tsb > 25 ? 'tu es très frais — garde un peu de rythme pour ne pas perdre les bénéfices'
+        : ($tsb > 5 ? 'tu es frais, un bon moment pour taper une séance de qualité'
+        : ($tsb > -10 ? 'tu es dans une zone neutre, ni chargé ni très frais'
+        : ($tsb > -30 ? 'tu portes de la charge : c’est là qu’on construit la forme'
+        : 'ta fraîcheur est très basse, ton corps réclame une pause')));
+
+    $trend = $ctlDelta > 1 ? 'ta forme monte doucement (+' . number_format($ctlDelta, 1, ',', ' ') . ' en 7 j)'
+        : ($ctlDelta < -1 ? 'ta forme baisse doucement (' . number_format($ctlDelta, 1, ',', ' ') . ' en 7 j)'
+        : 'ta forme est stable');
+
+    $hrv = '';
+    if ($hrvDelta !== null) {
+        $hd = number_format(abs($hrvDelta), 0, ',', ' ');
+        $hrv = $hrvDelta <= -8 ? 'ton HRV est nettement plus bas que d’habitude (−' . $hd . ' ms) : le corps tire la sonnette d’alarme'
+            : ($hrvDelta < -3 ? 'ton HRV est un peu plus bas que d’habitude (−' . $hd . ' ms)'
+            : ($hrvDelta < 3 ? 'ton HRV est stable'
+            : 'ton HRV est plus haut que d’habitude (+' . $hd . ' ms) : bonne récupération'));
+    } elseif ($hrvAvg !== null) {
+        $hrv = 'ton HRV tourne autour de ' . (int)round($hrvAvg) . ' ms';
+    }
+
+    $sleep = '';
+    if ($sleepH !== null) {
+        $sh = str_replace('.', ',', (string)$sleepH);
+        if ($sleepH < 6.5) $sleep = 'et tes nuits sont courtes (' . $sh . ' h en moyenne)';
+        elseif ($sleepH >= 8) $sleep = 'et tes nuits sont solides (' . $sh . ' h en moyenne)';
+    }
+
+    $week = $nb7 > 0
+        ? 'cette semaine : ' . $tss7 . ' TSS en ' . $nb7 . ' séance' . ($nb7 > 1 ? 's' : '') . ' (' . fmt_dur((int)($w7['d'] ?? 0)) . ')'
+        : 'aucune séance enregistrée depuis 7 jours';
+
+    $kind = $tsb > 25 ? 'Pleine fraîcheur'
+        : ($tsb > 5 ? 'Frais et disponible'
+        : ($tsb > -10 ? 'Rythme régulier'
+        : ($tsb > -30 ? 'Belle charge d’entraînement' : 'Corps sous charge lourde')));
+
+    $next = ($r > 1.5 || $tsb < -30) ? 'En priorité, mets une vraie journée de repos au planning, même si tu te sens bien.'
+        : ($hrvDelta !== null && $hrvDelta <= -8 ? 'En priorité, dors et mange bien pendant 2-3 jours avant de remonter l’intensité.'
+        : ($nb7 === 0 ? 'En priorité, remets un peu de mouvement cette semaine, même une sortie courte.'
+        : ($tsb > 5 && $r <= 1.05 ? 'En priorité, profite-en pour mettre une belle séance de qualité.'
+        : 'En priorité, continue comme ça : ton rythme actuel construit la forme.')));
+
+    $main = $kind . ' : ' . $fatigue . ', ' . $trend . '.';
+    $simple = 'En clair : ' . $fatigue . ' — ' . $fresh . '. ' . ucfirst($week)
+        . ($hrv ? '. ' . ucfirst($hrv) : '')
+        . ($sleep ? ' ' . $sleep : '')
+        . '. ' . $next;
+
+    $level = ($r > 1.5 || $tsb < -30 || ($hrvDelta !== null && $hrvDelta <= -8)) ? 'warn'
+        : (($tsb > 5 && $r <= 1.05) || ($hrvDelta !== null && $hrvDelta >= 3 && $r < 1.4) ? 'good' : 'info');
+
+    return ['level' => $level, 'main' => $main, 'simple' => $simple];
 }
