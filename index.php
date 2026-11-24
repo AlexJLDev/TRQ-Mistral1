@@ -104,11 +104,19 @@ if ($p === 'coach_athlete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $act = (string)($_POST['coach_plan_act'] ?? '');
             try {
                 if ($act === 'add') {
+                    /* séance structurée : structure/profile copiés depuis la bibliothèque du coach (séances en % → portable entre athlètes) */
+                    $woId = (int)($_POST['wo_id'] ?? 0); $structure = null; $profile = null; $mode = 'power';
+                    if ($woId > 0) {
+                        $rw = db()->prepare('SELECT mode, structure, profile FROM workouts WHERE id = ?');
+                        $rw->execute([$woId]); $wo = $rw->fetch();
+                        if ($wo) { $structure = (string)$wo['structure']; $profile = (string)$wo['profile']; $mode = ($wo['mode'] ?? '') === 'hr' ? 'hr' : 'power'; }
+                        else $woId = 0;
+                    }
                     $ok = coach_plan_add($cid, $pid, trim((string)($_POST['date'] ?? '')), (string)($_POST['sport'] ?? 'ride'),
                         trim((string)($_POST['title'] ?? '')) ?: t('Séance planifiée'),
                         (int)($_POST['duration_min'] ?? 0) * 60, (float)($_POST['distance_km'] ?? 0) * 1000,
                         isset($_POST['tss']) && trim((string)$_POST['tss']) !== '' ? (float)$_POST['tss'] : null,
-                        trim((string)($_POST['notes'] ?? '')));
+                        trim((string)($_POST['notes'] ?? '')), $structure, $profile, $woId ?: null, $mode);
                     header('Location: ?p=coach_athlete&id=' . $pid . ($ok ? '&plan=1' : '&plan=0'));
                     exit;
                 } elseif ($act === 'del') {
@@ -5185,7 +5193,20 @@ if ($p === 'coach_athlete') {
       <?php endif; ?>
     </div>
 
-    <?php $plans = coach_plan_list($aid); ?>
+    <?php
+    $plans = coach_plan_list($aid);
+    /* bibliothèque structurée du coach (sa propre base) : structures en % → réutilisables sur tout le roster */
+    $libJs = [];
+    foreach (coach_library(current_uid()) as $wo) {
+        $prof = json_decode((string)$wo['profile'], true) ?: [];
+        $libJs[$wo['id']] = [
+            'name' => (string)$wo['name'], 'sport' => (string)$wo['sport'], 'mode' => (string)$wo['mode'], 'unit' => (string)$wo['unit'],
+            'duration' => (int)$wo['duration'], 'tss' => (float)$wo['tss'],
+            'structure' => (string)$wo['structure'], 'profile' => (string)$wo['profile'],
+            'svg' => $prof ? workout_mini_svg($prof, ($wo['mode'] ?? '') === 'hr' ? 'hr' : 'power') : '',
+        ];
+    }
+    ?>
     <?php if (isset($_GET['err'])): ?>
       <div class="alert" data-variant="destructive"><h2><?= h((string)$_GET['err']) ?></h2></div>
     <?php elseif (isset($_GET['plan'])): ?>
@@ -5203,7 +5224,7 @@ if ($p === 'coach_athlete') {
         <?php foreach ($plans as $pl): ?>
           <tr>
             <td class="whitespace-nowrap text-xs text-muted-foreground"><?= h(date('d/m', strtotime((string)$pl['date']))) ?></td>
-            <td><div class="font-medium text-sm"><?= h((string)$pl['title']) ?></div><div class="mt-0.5"><?= sport_badge((string)$pl['sport']) ?></div></td>
+            <td><div class="font-medium text-sm"><?= !empty($pl['structure']) ? '🧩 ' : '' ?><?= h((string)$pl['title']) ?></div><div class="mt-0.5"><?= sport_badge((string)$pl['sport']) ?></div></td>
             <td class="tabular-nums text-xs"><?= $pl['duration'] ? fmt_dur((int)$pl['duration']) : '–' ?></td>
             <td class="tabular-nums text-xs"><?= $pl['tss'] !== null && (float)$pl['tss'] > 0 ? n((float)$pl['tss'], 0) : '–' ?></td>
             <td class="text-xs text-muted-foreground"><?= $pl['notes'] ? h((string)$pl['notes']) : '–' ?></td>
@@ -5227,6 +5248,23 @@ if ($p === 'coach_athlete') {
       <form method="post" action="?p=coach_athlete" class="p-4 grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
         <input type="hidden" name="coach_plan_act" value="add">
         <input type="hidden" name="athlete_id" value="<?= $aid ?>">
+        <input type="hidden" name="wo_id" value="0">
+        <input type="hidden" name="structure" id="woStructure" value="">
+        <input type="hidden" name="profile" id="woProfile" value="">
+        <input type="hidden" name="mode" id="woMode" value="power">
+        <?php if ($libJs): ?>
+        <label class="text-xs font-medium space-y-1 col-span-2 md:col-span-4"><span>📚 <?= t('Depuis ta bibliothèque de séances structurées') ?></span>
+          <select class="input" id="woLib">
+            <option value="">— <?= t('Séance simple') ?> —</option>
+            <?php foreach ($libJs as $woIdL => $woL): ?>
+              <option value="<?= (int)$woIdL ?>"><?= h($woL['name']) ?> · <?= $woL['duration'] > 0 ? h(fmt_dur($woL['duration'])) . ' · ' : '' ?><?= $woL['tss'] > 0 ? h(n($woL['tss'], 0) . ' TSS') : '' ?></option>
+            <?php endforeach; ?>
+          </select></label>
+        <div class="col-span-2 md:col-span-4 flex items-center gap-3">
+          <div id="woSvg" class="w-40 shrink-0"></div>
+          <p id="woAbsWarn" class="hidden text-xs text-amber-600 dark:text-amber-400"><?= t('Séance en valeurs absolues — vérifie qu’elle correspond au niveau de ton athlète.') ?></p>
+        </div>
+        <?php endif; ?>
         <label class="text-xs font-medium space-y-1"><span><?= t('Date') ?></span>
           <input class="input" type="date" name="date" required value="<?= date('Y-m-d') ?>"></label>
         <label class="text-xs font-medium space-y-1"><span><?= t('Discipline') ?></span>
@@ -5250,6 +5288,36 @@ if ($p === 'coach_athlete') {
       </form>
     </div>
 
+    <?php if ($libJs): ?>
+    <script>
+    (function () {
+      const WOLIB = <?= json_encode($libJs, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+      const sel = document.getElementById('woLib');
+      if (!sel) return;
+      sel.addEventListener('change', () => {
+        const w = WOLIB[sel.value];
+        const f = sel.closest('form');
+        document.getElementById('woStructure').value = '';
+        document.getElementById('woProfile').value = '';
+        document.getElementById('woMode').value = 'power';
+        document.getElementById('woSvg').innerHTML = '';
+        document.getElementById('woAbsWarn').classList.add('hidden');
+        if (w) {
+          f.title.value = w.name;
+          f.duration_min.value = w.duration > 0 ? Math.round(w.duration / 60) : '';
+          f.tss.value = w.tss > 0 ? Math.round(w.tss) : '';
+          if (f.sport.querySelector('option[value="' + w.sport + '"]')) f.sport.value = w.sport;
+          f.distance_km.value = '';
+          document.getElementById('woStructure').value = w.structure || '';
+          document.getElementById('woProfile').value = w.profile || '';
+          document.getElementById('woMode').value = w.mode || 'power';
+          document.getElementById('woSvg').innerHTML = w.svg || '';
+          document.getElementById('woAbsWarn').classList.toggle('hidden', w.unit !== 'abs');
+        }
+      });
+    })();
+    </script>
+    <?php endif; ?>
     <script>
     (function () {
       const pmcL = <?= json_encode(array_map(fn($x) => substr($x['k'], 8, 2) . '/' . substr($x['k'], 5, 2), $pmc90)) ?>,

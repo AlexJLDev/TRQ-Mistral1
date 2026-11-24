@@ -356,7 +356,7 @@ function coach_plan_list(int $athleteId, int $limit = 30): array {
     $p = coach_open_db($athleteId);
     if (!$p) return [];
     try {
-        return $p->query("SELECT id, date, sport, title, duration, distance, tss, notes FROM planned_workouts WHERE date >= date('now') ORDER BY date LIMIT " . max(1, min(100, $limit)))->fetchAll();
+        return $p->query("SELECT id, date, sport, title, duration, distance, tss, structure, notes FROM planned_workouts WHERE date >= date('now') ORDER BY date LIMIT " . max(1, min(100, $limit)))->fetchAll();
     } catch (\Throwable $e) {
         return [];
     }
@@ -368,14 +368,25 @@ function coach_plan_list(int $athleteId, int $limit = 30): array {
  * $durSec en secondes, $distM en mètres (conventions du calendrier).
  */
 function coach_plan_add(int $coachId, int $athleteId, string $date, string $sport, string $title,
-                        int $durSec = 0, float $distM = 0.0, ?float $tss = null, string $notes = ''): bool {
+                        int $durSec = 0, float $distM = 0.0, ?float $tss = null, string $notes = '',
+                        ?string $structureJson = null, ?string $profileJson = null, ?int $workoutId = null,
+                        string $mode = 'power'): bool {
     if (!coach_is_active($coachId, $athleteId)) return false;
     if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) !== 1) return false;
     if (!in_array($sport, ['ride', 'run', 'swim', 'other'], true)) $sport = 'ride';
+    /* séance structurée : structure/profile = JSON (copié depuis la bibliothèque du coach, unit='pct' → portable entre athlètes) */
+    if ($structureJson !== null && json_decode($structureJson, true) === null) $structureJson = null;
+    if ($profileJson !== null && json_decode($profileJson, true) === null) $profileJson = null;
+    if ($structureJson !== null && strlen($structureJson) > 200000) return false;
+    $tssType = ($structureJson !== null && $mode === 'hr') ? 'hrtss' : 'power';
     $p = coach_open_db($athleteId);
     if (!$p) return false;
-    $st = $p->prepare('INSERT INTO planned_workouts(date, sport, title, duration, distance, tss, notes) VALUES (?,?,?,?,?,?,?)');
-    $st->execute([$date, $sport, $title, $durSec > 0 ? $durSec : null, $distM > 0 ? $distM : null, $tss, $notes]);
+    $cols = 'date, sport, title, duration, distance, tss, notes' . ($structureJson !== null ? ', structure, profile, workout_id, tss_type' : '');
+    $qs = '?,?,?,?,?,?,?' . ($structureJson !== null ? ',?,?,?,?,?' : '');
+    $vals = [$date, $sport, $title, $durSec > 0 ? $durSec : null, $distM > 0 ? $distM : null, $tss, $notes];
+    if ($structureJson !== null) $vals = array_merge($vals, [$structureJson, $profileJson, $workoutId, $tssType]);
+    $st = $p->prepare("INSERT INTO planned_workouts($cols) VALUES ($qs)");
+    $st->execute($vals);
     $when = date('d/m', strtotime($date));
     $det = [];
     if ($durSec > 0) $det[] = sprintf('%dh%02d', intdiv($durSec, 3600), intdiv($durSec % 3600, 60));
@@ -396,4 +407,12 @@ function coach_plan_del(int $coachId, int $athleteId, int $planId): bool {
     $st = $p->prepare('DELETE FROM planned_workouts WHERE id = ?');
     $st->execute([$planId]);
     return $st->rowCount() > 0;
+}
+
+/** Bibliothèque de séances structurées du coach (sa propre base) — légende + structures pour le select de planification. */
+function coach_library(int $coachId, int $limit = 50): array {
+    try {
+        return db()->prepare('SELECT id, name, sport, mode, unit, duration, tss, structure, profile FROM workouts ORDER BY updated_at DESC LIMIT ' . max(1, min(200, $limit)))
+            ->fetchAll();
+    } catch (\Throwable $e) { return []; }
 }

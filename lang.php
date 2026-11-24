@@ -1175,6 +1175,9 @@ function trq_i18n(): array {
     'Séance planifiée ajoutée dans le calendrier de ton athlète.' => 'Planned workout added to your athlete’s calendar.',
     'La séance n’a pas pu être ajoutée.' => 'The workout could not be added.',
     'Ton coach a planifié une séance' => 'Your coach scheduled a workout',
+    'Séance simple' => 'Simple workout',
+    'Depuis ta bibliothèque de séances structurées' => 'From your structured workout library',
+    'Séance en valeurs absolues — vérifie qu’elle correspond au niveau de ton athlète.' => 'Workout in absolute values — check that it matches your athlete’s level.',
     ];
     return $d;
 }
