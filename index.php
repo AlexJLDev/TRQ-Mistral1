@@ -3022,6 +3022,48 @@ if ($p === 'activity') {
     const baseSeries = [powerData, hrData, spdData, altData, cadData].find(s => s.length) || [];
     const labels = baseSeries.map((_, i) => (i * step / 60).toFixed(0) + ' min');
 
+    /* ---------- Bandes de zone (traits colorés sous les courbes) ----------
+       Affichées uniquement si les seuils existent dans Paramètres :
+       Puissance -> 7 zones Coggan en % de FTP (même couleur que zoneColor),
+       FC -> 5 zones en % de LTHR (0.81 / 0.89 / 0.93 / 0.99 — identique à hr_zones()). */
+    const ZCOLS = ['#94a3b8', '#0ea5e9', '#10b981', '#f59e0b', '#f97316', '#f43f5e', '#a855f7'];
+    const ZHRCOLS = ['#94a3b8', '#0ea5e9', '#10b981', '#f59e0b', '#f43f5e'];
+    const lthrValue = <?= (float)cfg('lthr', 172) ?>;
+    const zoneOfW = w => { if (!(w > 0) || !(ftpValue > 0)) return 0; const r = w / ftpValue; return r > 1.5 ? 7 : r > 1.2 ? 6 : r > 1.05 ? 5 : r > 0.9 ? 4 : r > 0.75 ? 3 : r > 0.55 ? 2 : 1; };
+    const zoneOfHr = h => { if (!(h > 0) || !(lthrValue > 0)) return 0; const r = h / lthrValue; return r > 0.99 ? 5 : r > 0.93 ? 4 : r > 0.89 ? 3 : r > 0.81 ? 2 : 1; };
+    const zoneBandPlugin = {
+        id: 'zoneBands',
+        afterDatasetsDraw(chart) {
+            const zc = chart.options.plugins && chart.options.plugins.zoneBands;
+            if (!zc || !zc.bands || !zc.bands.length) return;
+            const {ctx, chartArea, scales} = chart;
+            if (!chartArea || !scales || !scales.x) return;
+            const xs = scales.x, px = v => xs.getPixelForValue(v);
+            const bH = 5, gap = 2, bands = zc.bands;
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(chartArea.left - 1, chartArea.top - 1, chartArea.width + 2, chartArea.height + 2);
+            ctx.clip();
+            bands.forEach((b, bi) => {
+                const n = b.vals.length; if (!n) return;
+                const ty = chartArea.bottom - (bands.length - bi) * (bH + gap);
+                for (let i = 0; i < n; i++) {
+                    const z = b.vals[i]; if (!z) continue;
+                    const xc = px(i);
+                    let w = 4;
+                    if (n > 1) w = Math.abs((i + 1 < n ? px(i + 1) : xc - (xc - px(i - 1))) - xc);
+                    if (!w) continue;
+                    ctx.fillStyle = b.cols[z - 1];
+                    ctx.fillRect(xc - w / 2, ty, w, bH);
+                }
+            });
+            ctx.restore();
+        }
+    };
+    const zoneBandsPower = (powerData.length && ftpValue > 0) ? [{cols: ZCOLS, vals: powerData.map(zoneOfW)}] : [];
+    const zoneBandsHr = (hrData.length && lthrValue > 0) ? [{cols: ZHRCOLS, vals: hrData.map(zoneOfHr)}] : [];
+    const zoneBandsTelemetry = [...zoneBandsPower, ...zoneBandsHr];
+
     const datasets = [
         { label: 'Puissance (W)', data: powerData, borderColor: '#06b6d4', borderWidth: 1.2, pointRadius: 0, yAxisID: 'y' },
         { label: 'Puissance 30s', data: power30Data, borderColor: '#6366f1', borderWidth: 2, pointRadius: 0, yAxisID: 'y' },
@@ -3268,11 +3310,13 @@ if ($p === 'activity') {
 
     const chartInstance = new Chart('fullTelemetry', {
         type: 'line',
+        plugins: [zoneBandPlugin],
         data: { labels: labels, datasets: datasets },
         options: {
             maintainAspectRatio: false,
             animation: false,
             interaction: { mode: 'index', intersect: false },
+            plugins: { zoneBands: { bands: zoneBandsTelemetry } },
             scales: {
                 x: { ticks: { maxTicksLimit: 12 } },
                 y: { title: { display: true, text: 'Watts' }, position: 'left' },
@@ -3355,9 +3399,11 @@ if ($p === 'activity') {
             }
             stackedCharts.push(new Chart(elPwr, {
                 type: 'line',
+                plugins: [zoneBandPlugin],
                 data: { labels: labels, datasets: pwrDatasets },
                 options: {
                     ...commonOptions,
+                    plugins: { ...(commonOptions.plugins || {}), zoneBands: { bands: zoneBandsPower } },
                     scales: {
                         x: { display: false },
                         y: { title: { display: true, text: 'Watts' }, min: 0 }
@@ -3394,9 +3440,11 @@ if ($p === 'activity') {
             }
             stackedCharts.push(new Chart(elHr, {
                 type: 'line',
+                plugins: [zoneBandPlugin],
                 data: { labels: labels, datasets: hrDatasets },
                 options: {
                     ...commonOptions,
+                    plugins: { ...(commonOptions.plugins || {}), zoneBands: { bands: zoneBandsHr } },
                     scales: {
                         x: { display: false },
                         y: { title: { display: true, text: 'bpm' }, min: 60 }
