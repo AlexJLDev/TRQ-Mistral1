@@ -79,6 +79,7 @@ function coach_role_toggle(int $uid): string {
 
 /** Crée (ou remplace) le code d'invitation de l'athlète. Retourne le code en clair (jamais stocké tel quel). */
 function coach_invite_create(int $athleteId): array {
+    coach_schema();
     $pool = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans I, O, 1, 0 (ambigus à la lecture)
     $code = '';
     for ($i = 0; $i < 6; $i++) $code .= $pool[random_int(0, strlen($pool) - 1)];
@@ -92,6 +93,7 @@ function coach_invite_create(int $athleteId): array {
 
 /** Invite en cours d'un athlète : ['expires_at' => int] ou null. Ne restitue jamais le code en clair. */
 function coach_invite_get(int $athleteId): ?array {
+    coach_schema();
     $st = auth_db()->prepare('SELECT expires_at FROM coach_invites WHERE athlete_id = ? AND expires_at > ?');
     $st->execute([$athleteId, time()]);
     $r = $st->fetch();
@@ -99,11 +101,13 @@ function coach_invite_get(int $athleteId): ?array {
 }
 
 function coach_invite_revoke(int $athleteId): void {
+    coach_schema();
     auth_db()->prepare('DELETE FROM coach_invites WHERE athlete_id = ?')->execute([$athleteId]);
 }
 
 /** Résout un code saisi par un coach. Retourne ['athlete_id', 'athlete_name'] ou null. */
 function coach_invite_lookup(string $code): ?array {
+    coach_schema();
     $code = strtoupper(trim($code));
     if (preg_match('/^[ABCDEFGHJKLMNPQRSTUVWXYZ2-9]{6}$/', $code) !== 1) return null;
     $st = auth_db()->prepare(
@@ -131,6 +135,7 @@ function coach_request_via_code(int $coachId, string $code): array {
 
 /** Crée (ou réactive) une demande pending d'un coach vers un athlète. */
 function coach_request(int $coachId, int $athleteId): bool {
+    coach_schema();
     $pdo = auth_db();
     $st = $pdo->prepare('SELECT id, status FROM coach_links WHERE coach_id = ? AND athlete_id = ?');
     $st->execute([$coachId, $athleteId]);
@@ -149,6 +154,7 @@ function coach_request(int $coachId, int $athleteId): bool {
 
 /** L'athlète accepte une demande. Rafraîchit le snapshot. */
 function coach_accept(int $athleteId, int $linkId): bool {
+    coach_schema();
     $st = auth_db()->prepare(
         'UPDATE coach_links SET status = \'active\', activated_at = ? WHERE id = ? AND athlete_id = ? AND status = \'pending\'');
     $st->execute([time(), $linkId, $athleteId]);
@@ -159,6 +165,7 @@ function coach_accept(int $athleteId, int $linkId): bool {
 
 /** L'athlète refuse une demande (la ligne disparaît). */
 function coach_reject(int $athleteId, int $linkId): bool {
+    coach_schema();
     $st = auth_db()->prepare('DELETE FROM coach_links WHERE id = ? AND athlete_id = ? AND status = \'pending\'');
     $st->execute([$linkId, $athleteId]);
     return $st->rowCount() > 0;
@@ -166,6 +173,7 @@ function coach_reject(int $athleteId, int $linkId): bool {
 
 /** Révocation — par l'athlète (coachId) ou par le coach lui-même (athleteId). */
 function coach_revoke(int $athleteId, int $coachId): bool {
+    coach_schema();
     $st = auth_db()->prepare(
         'UPDATE coach_links SET status = \'revoked\', revoked_at = ? WHERE athlete_id = ? AND coach_id = ? AND status = \'active\'');
     $st->execute([time(), $athleteId, $coachId]);
@@ -174,6 +182,7 @@ function coach_revoke(int $athleteId, int $coachId): bool {
 
 /** Garde-fou ACL : lien actif entre ce coach et cet athlète ? */
 function coach_is_active(int $coachId, int $athleteId): bool {
+    coach_schema();
     $st = auth_db()->prepare('SELECT 1 FROM coach_links WHERE coach_id = ? AND athlete_id = ? AND status = \'active\'');
     $st->execute([$coachId, $athleteId]);
     return (bool)$st->fetch();
@@ -181,6 +190,7 @@ function coach_is_active(int $coachId, int $athleteId): bool {
 
 /** Demandes en attente reçues par l'athlète (avec nom/email du coach). */
 function coach_pending(int $athleteId): array {
+    coach_schema();
     $st = auth_db()->prepare(
         'SELECT l.id, l.created_at, u.id AS coach_id, u.name, u.email FROM coach_links l
          JOIN users u ON u.id = l.coach_id AND u.active = 1
@@ -191,6 +201,7 @@ function coach_pending(int $athleteId): array {
 
 /** Coachs actifs de l'athlète. */
 function coach_coached_by(int $athleteId): array {
+    coach_schema();
     $st = auth_db()->prepare(
         'SELECT l.activated_at, u.id AS coach_id, u.name, u.email, u.avatar_ts FROM coach_links l
          JOIN users u ON u.id = l.coach_id AND u.active = 1
@@ -201,6 +212,7 @@ function coach_coached_by(int $athleteId): array {
 
 /** Athlètes actifs du coach (fiche de liaison). */
 function coach_athletes(int $coachId): array {
+    coach_schema();
     $st = auth_db()->prepare(
         'SELECT l.activated_at, u.id AS athlete_id, u.name, u.email, u.avatar_ts FROM coach_links l
          JOIN users u ON u.id = l.athlete_id AND u.active = 1
@@ -235,6 +247,7 @@ function coach_open_db(int $athleteId): ?PDO {
  * CTL 42 j, ATL 7 j). No-op si l'athlète n'a aucun coach actif ou pas de base.
  */
 function coach_snapshot_refresh(int $athleteId): void {
+    coach_schema();
     $pdo = auth_db();
     $st = $pdo->prepare('SELECT 1 FROM coach_links WHERE athlete_id = ? AND status = \'active\' LIMIT 1');
     $st->execute([$athleteId]);
@@ -305,6 +318,7 @@ function coach_snapshot_refresh(int $athleteId): void {
  * (auth.sqlite only). Les snapshots sont rafraîchis à part (coach_snapshot_refresh).
  */
 function coach_roster(int $coachId): array {
+    coach_schema();
     $st = auth_db()->prepare(
         'SELECT u.id AS athlete_id, u.name, u.email, u.avatar_ts,
                 s.ctl, s.atl, s.tsb, s.tss_7j, s.tss_28j, s.last_activity, s.last_sync, s.alert_level, s.computed_at
