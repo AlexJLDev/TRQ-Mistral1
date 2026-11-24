@@ -58,7 +58,7 @@ $csrf = csrf_token();
 $minPw = max(8, (int)trq_config('min_password'));
 function f_old(array $o, string $k): string { return htmlspecialchars($o[$k] ?? '', ENT_QUOTES, 'UTF-8'); }
 ?><!doctype html>
-<html lang="fr">
+<html lang="<?= h(trq_lang()) ?>">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?= h($titles[$a]) ?> · TRQ</title>
