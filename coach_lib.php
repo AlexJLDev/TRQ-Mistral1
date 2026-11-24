@@ -412,7 +412,7 @@ function coach_plan_del(int $coachId, int $athleteId, int $planId): bool {
 /** Bibliothèque de séances structurées du coach (sa propre base) — légende + structures pour le select de planification. */
 function coach_library(int $coachId, int $limit = 50): array {
     try {
-        return db()->prepare('SELECT id, name, sport, mode, unit, duration, tss, structure, profile FROM workouts ORDER BY updated_at DESC LIMIT ' . max(1, min(200, $limit)))
+        return db()->query('SELECT id, name, sport, mode, unit, duration, tss, structure, profile FROM workouts ORDER BY updated_at DESC LIMIT ' . max(1, min(200, $limit)))
             ->fetchAll();
     } catch (\Throwable $e) { return []; }
 }
