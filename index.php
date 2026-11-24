@@ -4978,7 +4978,7 @@ if ($p === 'coach') {
           $tsb = $r['tsb'] === null ? null : (float)$r['tsb'];
           $lastAct = $r['last_activity'] ? substr((string)$r['last_activity'], 0, 10) : null;
           $lastSync = $r['last_sync'] ? substr((string)$r['last_sync'], 0, 10) : null; ?>
-      <div class="card p-4 space-y-3" data-roster-card="<?= h(($r['name'] ?? '') . ' ' . ($r['email'] ?? '')) ?>">
+      <a class="card p-4 space-y-3 block hover:border-primary/50 transition" data-roster-card="<?= h(($r['name'] ?? '') . ' ' . ($r['email'] ?? '')) ?>" href="?p=coach_athlete&id=<?= (int)$r['athlete_id'] ?>" title="<?= h(t('Voir la fiche complète')) ?>">
         <div class="flex items-start gap-3">
           <span class="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground"><?= h($ini) ?></span>
           <div class="min-w-0 flex-1">
@@ -4997,7 +4997,7 @@ if ($p === 'coach') {
           <span><?= t('Dernière séance') ?> : <b class="font-medium text-foreground/80"><?= $lastAct ?: '–' ?></b></span>
           <?php if ($lastSync): ?><span><?= t('Dernier sync') ?> : <?= $lastSync ?></span><?php endif; ?>
         </div>
-      </div>
+      </a>
     <?php endforeach; ?>
     </div>
 
@@ -5028,6 +5028,150 @@ if ($p === 'coach') {
       search && search.addEventListener('input', apply);
       more && more.addEventListener('click', () => { shown += PER; apply(); });
       apply();
+    })();
+    </script>
+    <?php foot(); exit;
+}
+
+if ($p === 'coach_athlete') {
+    head(t('Fiche athlète'), 'coach');
+    if (!coach_enabled() || !coach_is_coach()) {
+        echo '<div class="alert" data-variant="destructive"><h2>' . t('Accès réservé aux coaches.') . '</h2><p class="text-xs text-muted-foreground">' . t('Active le rôle coach dans tes Paramètres, puis fais-toi confier des athlètes via leur code d’invitation.') . '</p></div>';
+        foot(); exit;
+    }
+    $aid = (int)($_GET['id'] ?? 0);
+    if ($aid <= 0 || !coach_is_active(current_uid(), $aid)) {
+        echo '<div class="alert" data-variant="destructive"><h2>' . t('Tu ne suis pas cet athlète (ou l’accès a été révoqué).') . '</h2><p class="text-xs text-muted-foreground"><a class="underline" href="?p=coach">' . t('← Retour au roster') . '</a></p></div>';
+        foot(); exit;
+    }
+    $au = auth_db()->prepare('SELECT name, email, last_login FROM users WHERE id = ?'); $au->execute([$aid]); $ath = $au->fetch();
+    $lk = auth_db()->prepare('SELECT activated_at FROM coach_links WHERE coach_id = ? AND athlete_id = ? AND status = \'active\'');
+    $lk->execute([current_uid(), $aid]); $since = (int)($lk->fetchColumn() ?: 0);
+
+    $apd = coach_open_db($aid);   // lecture seule de la base de l'athlète
+    /* snapshot : recalcule si périmé (> 15 min) puis relit */
+    $qs = auth_db()->prepare('SELECT ctl, atl, tsb, tss_7j, tss_28j, last_activity, last_sync, alert_level, computed_at FROM coach_snapshots WHERE athlete_id = ?');
+    $qs->execute([$aid]); $snap = $qs->fetch();
+    if ($apd && (!$snap || (int)($snap['computed_at'] ?? 0) < time() - 900)) { coach_snapshot_refresh($aid); $qs->execute([$aid]); $snap = $qs->fetch(); }
+    if (!$apd) {
+        echo '<div class="alert"><h2>' . t('Aucune donnée pour cet athlète.') . '</h2><p class="text-xs text-muted-foreground">' . t('Sa base TRQ n’existe pas encore (il n’a probablement jamais synchronisé).') . '</p></div>';
+        foot(); exit;
+    }
+
+    $ALERT = [
+        0 => [t('Sain'), 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'],
+        1 => [t('Vigilance'), 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'],
+        2 => [t('Surmenage'), 'bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/30'],
+        3 => [t('Inactif'), 'bg-slate-500/15 text-slate-600 dark:text-slate-400 border border-slate-500/30'],
+    ];
+    $al = (int)($snap['alert_level'] ?? 0);
+    $ini = mb_strtoupper(mb_substr(trim((string)($ath['name'] ?? '?')) ?: '?', 0, 1));
+
+    /* PMC recalculé côté coach (même algorithme que pmc()) — 90 derniers jours pour le graphe */
+    $pmc90 = [];
+    $byDate = [];
+    foreach ($apd->query('SELECT substr(date,1,10) d, SUM(COALESCE(tss,0)) t FROM activities GROUP BY d ORDER BY d')->fetchAll() as $q) $byDate[$q['d']] = (float)$q['t'];
+    $n30 = (int)$apd->query("SELECT COUNT(*) FROM activities WHERE substr(date,1,10) >= date('now','-29 days')")->fetchColumn();
+    if ($byDate) {
+        $ctl = $atl = 0.0; $ser = [];
+        $d = new DateTime(array_key_first($byDate));
+        for ($end = new DateTime('today'); $d <= $end; $d->modify('+1 day')) {
+            $k = $d->format('Y-m-d'); $t = $byDate[$k] ?? 0.0;
+            $tsb = $ctl - $atl; $ctl += ($t - $ctl) / 42; $atl += ($t - $atl) / 7;
+            $ser[] = ['k' => $k, 'ctl' => round($ctl, 1), 'atl' => round($atl, 1), 'tsb' => round($tsb, 1)];
+        }
+        $pmc90 = array_slice($ser, -90);
+    }
+
+    $acts = $apd->query('SELECT ' . ACT_COLS . ' FROM activities ORDER BY date DESC LIMIT 20')->fetchAll();
+    $wells = $apd->query('SELECT date, hrv, resting_hr, sleep_sec, sleep_score, readiness FROM wellness ORDER BY date DESC LIMIT 7')->fetchAll();
+    ?>
+    <a href="?p=coach" class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:underline">← <?= t('Retour au roster') ?></a>
+
+    <div class="card p-5 flex flex-wrap items-center gap-4">
+      <span class="flex size-14 shrink-0 items-center justify-center rounded-full bg-primary text-xl font-semibold text-primary-foreground"><?= h($ini) ?></span>
+      <div class="min-w-0 flex-1">
+        <h1 class="truncate text-xl font-bold tracking-tight"><?= h((string)$ath['name']) ?></h1>
+        <p class="truncate text-sm text-muted-foreground"><?= h((string)$ath['email']) ?> · <?= t('accès depuis') ?> <?= date('d/m/Y', $since) ?><?= $ath['last_login'] ? ' · ' . t('Dernière connexion') . ' : ' . h(substr((string)$ath['last_login'], 0, 10)) : '' ?></p>
+      </div>
+      <span class="badge <?= $ALERT[$al][1] ?>"><?= $ALERT[$al][0] ?></span>
+    </div>
+
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      <div class="card p-3"><p class="text-[10px] uppercase tracking-wide text-muted-foreground">CTL · <?= t('forme') ?></p><p class="text-xl font-bold tabular-nums"><?= ($snap['ctl'] ?? null) !== null ? round((float)$snap['ctl']) : '–' ?></p></div>
+      <div class="card p-3"><p class="text-[10px] uppercase tracking-wide text-muted-foreground">ATL · <?= t('fatigue') ?></p><p class="text-xl font-bold tabular-nums"><?= ($snap['atl'] ?? null) !== null ? round((float)$snap['atl']) : '–' ?></p></div>
+      <?php $tsb = ($snap['tsb'] ?? null) === null ? null : (float)$snap['tsb']; ?>
+      <div class="card p-3"><p class="text-[10px] uppercase tracking-wide text-muted-foreground">TSB · <?= t('fraîcheur') ?></p><p class="text-xl font-bold tabular-nums <?= $tsb === null ? '' : ($tsb > 5 ? 'text-emerald-600 dark:text-emerald-400' : ($tsb < -10 ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400')) ?>"><?= $tsb === null ? '–' : ($tsb > 0 ? '+' : '') . round($tsb) ?></p></div>
+      <div class="card p-3"><p class="text-[10px] uppercase tracking-wide text-muted-foreground"><?= t('Charge 7 j') ?></p><p class="text-xl font-bold tabular-nums"><?= (int)($snap['tss_7j'] ?? 0) > 0 ? (int)$snap['tss_7j'] : '–' ?></p></div>
+      <div class="card p-3"><p class="text-[10px] uppercase tracking-wide text-muted-foreground"><?= t('Séances (30 j)') ?></p><p class="text-xl font-bold tabular-nums"><?= $n30 ?></p></div>
+    </div>
+
+    <div class="card"><section class="p-4 space-y-2">
+      <h3 class="text-sm font-semibold"><?= t('Progression de la forme (90 jours)') ?></h3>
+      <div class="h-64"><canvas id="caPmc"></canvas></div>
+      <?php if (!$pmc90): ?><p class="text-xs text-muted-foreground"><?= t('Aucune donnée pour tracer la courbe.') ?></p><?php endif; ?>
+    </section></div>
+
+    <div class="card">
+      <section class="p-4 pb-0"><h3 class="text-sm font-semibold"><?= t('Séances récentes') ?></h3></section>
+      <?php if (!$acts): ?><p class="p-4 text-sm text-muted-foreground"><?= t('Aucune séance enregistrée.') ?></p>
+      <?php else: ?>
+      <div class="table-container border-0"><table class="table">
+        <thead><tr><th><?= t('Date') ?></th><th><?= t('Séance') ?></th><th><?= t('Durée') ?></th><th><?= t('Dist.') ?></th><th><?= t('Charge') ?></th><th>IF</th><th><?= t('Puiss./Allure') ?></th></tr></thead>
+        <tbody>
+        <?php foreach ($acts as $a): ?>
+          <tr>
+            <td class="whitespace-nowrap text-xs text-muted-foreground"><?= h(substr((string)$a['date'], 0, 10)) ?></td>
+            <td><div class="font-medium text-sm"><?= h((string)($a['name'] ?: $a['type'])) ?></div><div class="mt-0.5"><?= sport_badge((string)$a['sport'], (string)$a['type']) ?></div></td>
+            <td class="tabular-nums text-xs"><?= fmt_dur((int)$a['duration']) ?></td>
+            <td class="tabular-nums text-xs"><?= $a['distance'] ? n($a['distance'] / 1000, 1) . ' km' : '–' ?></td>
+            <td><?= tss_badge($a['tss'] !== null ? (float)$a['tss'] : null, $a['tss_type'] ?? 'power') ?></td>
+            <td class="tabular-nums text-xs"><?= n($a['if_'], 2) ?></td>
+            <td class="tabular-nums font-semibold text-xs"><?= $a['sport'] === 'run' ? ($a['avg_speed'] ? pace((float)$a['avg_speed']) . ' /km' : '–') : ($a['np'] ? n($a['np']) . ' W' : '–') ?></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody></table></div>
+      <?php endif; ?>
+    </div>
+
+    <div class="card">
+      <section class="p-4 pb-0"><h3 class="text-sm font-semibold"><?= t('Wellness (7 derniers jours)') ?></h3></section>
+      <?php if (!$wells): ?><p class="p-4 text-sm text-muted-foreground"><?= t('Aucune donnée wellness.') ?></p>
+      <?php else: ?>
+      <div class="table-container border-0"><table class="table">
+        <thead><tr><th><?= t('Date') ?></th><th>HRV</th><th><?= t('Sommeil') ?></th><th><?= t('FC repos') ?></th><th><?= t('Readiness') ?></th></tr></thead>
+        <tbody>
+        <?php foreach ($wells as $w): ?>
+          <tr>
+            <td class="whitespace-nowrap text-xs text-muted-foreground"><?= h($w['date']) ?></td>
+            <td class="tabular-nums text-xs"><?= $w['hrv'] !== null ? n($w['hrv'], 1) . ' ms' : '–' ?></td>
+            <td class="tabular-nums text-xs"><?= $w['sleep_sec'] ? fmt_dur((int)$w['sleep_sec']) : '–' ?></td>
+            <td class="tabular-nums text-xs"><?= $w['resting_hr'] !== null ? n($w['resting_hr'], 0) . ' bpm' : '–' ?></td>
+            <td><?= readiness_badge($w['readiness'] !== null ? (float)$w['readiness'] : null) ?></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody></table></div>
+      <?php endif; ?>
+    </div>
+
+    <script>
+    (function () {
+      const pmcL = <?= json_encode(array_map(fn($x) => substr($x['k'], 8, 2) . '/' . substr($x['k'], 5, 2), $pmc90)) ?>,
+            pmcCtl = <?= json_encode(array_column($pmc90, 'ctl')) ?>,
+            pmcAtl = <?= json_encode(array_column($pmc90, 'atl')) ?>,
+            pmcTsb = <?= json_encode(array_column($pmc90, 'tsb')) ?>;
+      if (typeof Chart === 'undefined' || !pmcL.length) return;
+      new Chart('caPmc', {
+        type: 'line',
+        data: { labels: pmcL, datasets: [
+          { label: 'CTL (<?= t('forme') ?>)', data: pmcCtl, borderColor: '#6366f1', borderWidth: 2, pointRadius: 0, tension: 0.3 },
+          { label: 'ATL (<?= t('fatigue') ?>)', data: pmcAtl, borderColor: '#f43f5e', borderWidth: 1.5, pointRadius: 0, tension: 0.3 },
+          { label: 'TSB (<?= t('fraîcheur') ?>)', data: pmcTsb, borderColor: '#10b981', borderWidth: 1.5, pointRadius: 0, tension: 0.3 }
+        ] },
+        options: { maintainAspectRatio: false, animation: false, interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
+          scales: { x: { ticks: { maxTicksLimit: 10, font: { size: 10 } } }, y: { ticks: { font: { size: 10 } } } } }
+      });
     })();
     </script>
     <?php foot(); exit;
