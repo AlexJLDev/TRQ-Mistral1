@@ -278,3 +278,106 @@ function activity_diagnostic(array $a, array $S, array $laps, string $lapSource,
     $main = array_shift($list);
     return ['narrative' => $narrative, 'simple' => $simple, 'main' => ['level' => $main['level'], 'text' => $main['text']], 'extra' => array_map(fn($i) => ['level' => $i['level'], 'text' => $i['text']], array_slice($list, 0, 3))];
 }
+
+/* ============================================================
+   Forme du jour (tableau de bord) : lecture en clair de la forme,
+   de la fatigue, de la fraîcheur, de la charge sur 7 jours et de
+   la récupération (HRV, sommeil). Même philosophie que le
+   diagnostic de séance : un texte court style coach + une version
+   « en clair » sans jargon pour débuter.
+   ============================================================ */
+function form_narrative(?string $sport = null): array {
+    $pm = pmc($sport);
+    if (!$pm) return [];
+    $keys = array_keys($pm);
+    $last = $pm[end($keys)];
+    $ctl = (float)$last['ctl']; $atl = (float)$last['atl']; $tsb = (float)$last['tsb'];
+    if ($ctl < 5) return [];                       // historique trop court pour parler de « forme »
+
+    $prevCtl = isset($keys[count($keys) - 8]) ? (float)$pm[$keys[count($keys) - 8]]['ctl'] : $ctl;
+    $ctlDelta = $ctl - $prevCtl;                   // évolution de la forme sur 7 jours
+    $r = $atl > 0 ? $atl / max($ctl, 1) : 0.0;     // fatigue / forme
+
+    $pdo = db();
+    $since = date('Y-m-d', strtotime('-7 days'));
+    $st = $pdo->prepare('SELECT SUM(duration) d, SUM(tss) t, COUNT(*) nb FROM activities WHERE date >= ?' . ($sport ? ' AND sport=?' : ''));
+    $st->execute($sport ? [$since, $sport] : [$since]);
+    $w7 = $st->fetch() ?: [];
+    $tss7 = (int)round((float)($w7['t'] ?? 0));
+    $nb7 = (int)($w7['nb'] ?? 0);
+
+    /* Restitution : HRV des 7 derniers jours vs base des 28 précédents, sommeil récent */
+    $hrv7 = []; $hrvB = []; $sleep7 = [];
+    $i = 0;
+    foreach ($pdo->query('SELECT hrv, sleep_sec FROM wellness WHERE hrv IS NOT NULL OR sleep_sec IS NOT NULL ORDER BY date DESC LIMIT 35') as $w) {
+        if ($w['hrv'] !== null && $w['hrv'] > 0) {
+            if ($i < 7) $hrv7[] = (float)$w['hrv']; elseif (count($hrvB) < 28) $hrvB[] = (float)$w['hrv'];
+        }
+        if ($w['sleep_sec'] !== null && $w['sleep_sec'] > 0 && $i < 7) $sleep7[] = (float)$w['sleep_sec'];
+        $i++;
+    }
+    $hrvAvg = $hrv7 ? round(array_sum($hrv7) / count($hrv7), 1) : null;
+    $hrvBase = $hrvB ? round(array_sum($hrvB) / count($hrvB), 1) : null;
+    $hrvDelta = ($hrvAvg !== null && $hrvBase !== null) ? round($hrvAvg - $hrvBase, 1) : null;
+    $sleepH = $sleep7 ? round(array_sum($sleep7) / count($sleep7) / 3600, 1) : null;
+
+    /* ---------- Phrases (vocabulaire courant, pas de jargon) ---------- */
+    $fatigue = $r > 1.5 ? 'tu portes beaucoup trop de fatigue par rapport à ta forme'
+        : ($r > 1.3 ? 'tu portes pas mal de fatigue : c’est une vraie phase de charge'
+        : ($r > 0.8 ? 'tu portes une fatigue normale d’entraînement'
+        : 'tu récupères : ta fatigue est basse par rapport à ta forme'));
+
+    $fresh = $tsb > 25 ? 'tu es très frais — garde un peu de rythme pour ne pas perdre les bénéfices'
+        : ($tsb > 5 ? 'tu es frais, un bon moment pour taper une séance de qualité'
+        : ($tsb > -10 ? 'tu es dans une zone neutre, ni chargé ni très frais'
+        : ($tsb > -30 ? 'tu portes de la charge : c’est là qu’on construit la forme'
+        : 'ta fraîcheur est très basse, ton corps réclame une pause')));
+
+    $trend = $ctlDelta > 1 ? 'ta forme monte doucement (+' . number_format($ctlDelta, 1, ',', ' ') . ' en 7 j)'
+        : ($ctlDelta < -1 ? 'ta forme baisse doucement (' . number_format($ctlDelta, 1, ',', ' ') . ' en 7 j)'
+        : 'ta forme est stable');
+
+    $hrv = '';
+    if ($hrvDelta !== null) {
+        $hd = number_format(abs($hrvDelta), 0, ',', ' ');
+        $hrv = $hrvDelta <= -8 ? 'ton HRV est nettement plus bas que d’habitude (−' . $hd . ' ms) : le corps tire la sonnette d’alarme'
+            : ($hrvDelta < -3 ? 'ton HRV est un peu plus bas que d’habitude (−' . $hd . ' ms)'
+            : ($hrvDelta < 3 ? 'ton HRV est stable'
+            : 'ton HRV est plus haut que d’habitude (+' . $hd . ' ms) : bonne récupération'));
+    } elseif ($hrvAvg !== null) {
+        $hrv = 'ton HRV tourne autour de ' . (int)round($hrvAvg) . ' ms';
+    }
+
+    $sleep = '';
+    if ($sleepH !== null) {
+        $sh = str_replace('.', ',', (string)$sleepH);
+        if ($sleepH < 6.5) $sleep = 'et tes nuits sont courtes (' . $sh . ' h en moyenne)';
+        elseif ($sleepH >= 8) $sleep = 'et tes nuits sont solides (' . $sh . ' h en moyenne)';
+    }
+
+    $week = $nb7 > 0
+        ? 'cette semaine : ' . $tss7 . ' TSS en ' . $nb7 . ' séance' . ($nb7 > 1 ? 's' : '') . ' (' . fmt_dur((int)($w7['d'] ?? 0)) . ')'
+        : 'aucune séance enregistrée depuis 7 jours';
+
+    $kind = $tsb > 25 ? 'Pleine fraîcheur'
+        : ($tsb > 5 ? 'Frais et disponible'
+        : ($tsb > -10 ? 'Rythme régulier'
+        : ($tsb > -30 ? 'Belle charge d’entraînement' : 'Corps sous charge lourde')));
+
+    $next = ($r > 1.5 || $tsb < -30) ? 'En priorité, mets une vraie journée de repos au planning, même si tu te sens bien.'
+        : ($hrvDelta !== null && $hrvDelta <= -8 ? 'En priorité, dors et mange bien pendant 2-3 jours avant de remonter l’intensité.'
+        : ($nb7 === 0 ? 'En priorité, remets un peu de mouvement cette semaine, même une sortie courte.'
+        : ($tsb > 5 && $r <= 1.05 ? 'En priorité, profite-en pour mettre une belle séance de qualité.'
+        : 'En priorité, continue comme ça : ton rythme actuel construit la forme.')));
+
+    $main = $kind . ' : ' . $fatigue . ', ' . $trend . '.';
+    $simple = 'En clair : ' . $fatigue . ' — ' . $fresh . '. ' . ucfirst($week)
+        . ($hrv ? '. ' . ucfirst($hrv) : '')
+        . ($sleep ? ' ' . $sleep : '')
+        . '. ' . $next;
+
+    $level = ($r > 1.5 || $tsb < -30 || ($hrvDelta !== null && $hrvDelta <= -8)) ? 'warn'
+        : (($tsb > 5 && $r <= 1.05) || ($hrvDelta !== null && $hrvDelta >= 3 && $r < 1.4) ? 'good' : 'info');
+
+    return ['level' => $level, 'main' => $main, 'simple' => $simple];
+}

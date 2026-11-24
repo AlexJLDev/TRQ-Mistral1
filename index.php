@@ -1043,6 +1043,20 @@ if ($p === 'dashboard') {
       ?>
     </div>
 
+    <?php $form = form_narrative($sport); if ($form): ?>
+    <div class="card" id="formCard">
+      <section class="p-5">
+        <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          <span class="inline-block size-2 rounded-full" style="background:<?= ['#10b981', 'var(--primary)', '#f59e0b'][$form['level']] ?? 'var(--primary)' ?>"></span>
+          Ta forme du jour<?= $sport ? ' — ' . ($sport === 'ride' ? 'vélo' : 'course') : '' ?>
+        </div>
+        <p class="mt-1.5 text-base font-medium leading-snug"><?= h($form['main']) ?></p>
+        <p class="mt-2 rounded-lg bg-muted/50 px-3 py-2 text-xs leading-relaxed text-muted-foreground">💡 <?= h($form['simple']) ?></p>
+        <p class="mt-2 text-[11px] text-muted-foreground">Lecture automatique de tes indicateurs PMC (forme, fatigue, fraîcheur), de ta charge sur 7 jours et de ta récupération (HRV, sommeil) — indicatif, pas un diagnostic médical.</p>
+      </section>
+    </div>
+    <?php endif; ?>
+
     <?php $gs = progress_goal_status(); ?>
     <?php if ($gs['goals_set']): ?>
     <div class="card" id="goalsCard">
