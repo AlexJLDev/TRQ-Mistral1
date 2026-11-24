@@ -5499,7 +5499,16 @@ if ($p === 'settings') {
         </details>
       </div>
       <script>
-      document.getElementById('pwChangeBtn')?.addEventListener('click', async () => {
+      document.addEventListener('click', async (ev) => {   // délégation : la carte coach est rendue plus bas dans le DOM
+      const btn = ev.target instanceof Element ? ev.target.closest('#coachCodeCopy') : null;
+      if (!btn) return;
+      const code = (btn.closest('div.card')?.querySelector('code')?.textContent ?? '').trim();
+      if (!code) return;
+      try { await navigator.clipboard.writeText(code); btn.textContent = '✓'; }
+      catch (e) { btn.textContent = code; }
+      setTimeout(() => { btn.textContent = <?= json_encode(t('Copier')) ?>; }, 1600);
+    });
+    document.getElementById('pwChangeBtn')?.addEventListener('click', async () => {
         const m = document.getElementById('pwMsg'); m.className = 'text-xs text-muted-foreground'; m.textContent = '…';
         try {
           await call('account_password', {current: pwCur.value, new: pwNew.value, new2: pwNew2.value});
@@ -5658,14 +5667,6 @@ if ($p === 'settings') {
             <div class="rounded-lg border px-3 py-2 text-sm <?= $coachMsg['ok'] ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive' ?>"><?= h((string)$coachMsg['msg']) ?></div>
           <?php endif; ?>
 
-          <?php if ($coachFlash): ?>
-            <div class="rounded-lg border border-primary/40 bg-primary/5 px-3 py-3 space-y-1">
-              <p class="text-sm font-medium">Ton code d’invitation (valable 24 h) :</p>
-              <p class="font-mono text-2xl tracking-widest font-semibold"><?= h((string)$coachFlash['code']) ?></p>
-              <p class="text-xs text-muted-foreground">Communique-le à un seul coach : il l’entre de son côté, puis tu reçois une demande à accepter ci-dessous. Le code ne peut être utilisé qu’une fois.</p>
-            </div>
-          <?php endif; ?>
-
           <?php if ($isCoach): ?>
           <div class="rounded-lg border p-3 space-y-3">
             <div class="flex flex-wrap items-center gap-3">
@@ -5715,11 +5716,21 @@ if ($p === 'settings') {
           </div>
           <?php endif; ?>
 
-          <?php if ($myInvite): $hrs = max(1, (int)ceil(((int)$myInvite['expires_at'] - time()) / 3600)); ?>
-          <div class="flex flex-wrap items-center gap-3 rounded-lg border p-2.5">
-            <p class="text-xs text-muted-foreground flex-1 min-w-56">Un code d’invitation est en cours (encore valable ≈ <?= $hrs ?> h). Il reste utilisable une fois par un coach.</p>
-            <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="invite_cancel"><button class="btn" data-variant="ghost" data-size="sm" type="submit">Annuler le code</button></form>
+          <?php if ($myInvite): $hrs = max(1, (int)ceil(((int)$myInvite['expires_at'] - time()) / 3600));
+                $codeShow = (string)($coachFlash['code'] ?? ($myInvite['code'] ?? '')); ?>
+          <div class="rounded-lg border border-primary/40 bg-primary/5 px-3 py-3 space-y-2">
+            <p class="text-sm font-medium">Ton code d’invitation — encore valable ≈ <?= $hrs ?> h, utilisable une seule fois :</p>
+            <?php if ($codeShow !== ''): ?>
+            <div class="flex flex-wrap items-center gap-3">
+              <code class="font-mono text-2xl tracking-widest font-semibold"><?= h($codeShow) ?></code>
+              <button type="button" class="btn" data-size="sm" id="coachCodeCopy"><?= t('Copier') ?></button>
+            </div>
+            <?php else: ?>
+            <p class="text-xs text-muted-foreground">Ce code a été créé avant l’affichage permanent et ne peut plus être retrouvé : régénère-en un ci-dessous.</p>
+            <?php endif; ?>
+            <p class="text-xs text-muted-foreground">Communique-le à un seul coach : il l’entre de son côté, puis tu reçois une demande à accepter ci-dessous. Tu peux le réafficher ici tant qu’il est valable.</p>
           </div>
+          <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="invite_cancel"><button class="btn" data-variant="ghost" data-size="sm" type="submit">Annuler le code</button></form>
           <?php else: ?>
           <div class="flex flex-wrap items-center gap-3">
             <p class="text-xs text-muted-foreground flex-1 min-w-56">Pour être suivi par un coach : génère un code et communique-le-lui (valable 24 h, usage unique).</p>
