@@ -241,6 +241,7 @@ function head(string $title, string $active): void {
         'nutrition' => [t('Nutrition'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>'],
         'progress' => [t('Progression'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>'],
         'zones' => [t('Zones'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'],
+        'coach' => [t('Mes athlètes'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="15" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'],
         'settings' => [t('Paramètres'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'],
     ];
     ?>
@@ -485,6 +486,7 @@ $groups = [
     t('Santé')       => ['wellness', 'nutrition'],
     t('Compte')      => array_merge(['settings'], (auth_enabled() && is_admin()) ? ['admin'] : []),
 ];
+if (coach_enabled() && coach_is_coach()) $groups[t('Pilotage')] = ['coach'];   // module coach : onglet réservé au rôle coach
 ?>
 <aside id="sidebar" class="sidebar" data-side="left">
   <nav aria-label="Navigation principale">
@@ -4924,6 +4926,109 @@ if ($p === 'admin') {
     </section></div>
     <script>
     async function adminAct(action, id) { try { await call(action, {id}); location.reload(); } catch (e) { alert(e.message); } }
+    </script>
+    <?php foot(); exit;
+}
+
+if ($p === 'coach') {
+    head(t('Mes athlètes'), 'coach');
+    if (!coach_enabled() || !coach_is_coach()) {
+        echo '<div class="alert" data-variant="destructive"><h2>' . t('Accès réservé aux coaches.') . '</h2><p class="text-xs text-muted-foreground">' . t('Active le rôle coach dans tes Paramètres, puis fais-toi confier des athlètes via leur code d’invitation.') . '</p></div>';
+        foot(); exit;
+    }
+    /* Rafraîchissement des snapshots : au plus 10 par chargement, les plus périmés d'abord
+       (limite les hits et le temps CPU — important sur mutualisé) ; ?refresh=1 force tout. */
+    $force = isset($_GET['refresh']);
+    $roster = coach_roster(current_uid());
+    $stale = array_values(array_filter($roster, fn($r) => $force || !(int)($r['computed_at'] ?? 0) || (int)$r['computed_at'] < time() - 900));
+    usort($stale, fn($a, $b) => ((int)($a['computed_at'] ?? 0)) <=> ((int)($b['computed_at'] ?? 0)));
+    foreach (array_slice($stale, 0, 10) as $r) { try { coach_snapshot_refresh((int)$r['athlete_id']); } catch (Throwable $e) {} }
+    if ($stale) $roster = coach_roster(current_uid());
+    $nAlert = count(array_filter($roster, fn($r) => (int)($r['alert_level'] ?? 0) > 0));
+    $ALERT = [
+        0 => [t('Sain'), 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'],
+        1 => [t('Vigilance'), 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'],
+        2 => [t('Surmenage'), 'bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/30'],
+        3 => [t('Inactif'), 'bg-slate-500/15 text-slate-600 dark:text-slate-400 border border-slate-500/30'],
+    ];
+    ?>
+    <div class="flex flex-wrap items-end justify-between gap-3">
+      <div class="space-y-1">
+        <h1 class="text-2xl font-bold tracking-tight"><?= t('Mes athlètes') ?></h1>
+        <p class="text-sm text-muted-foreground"><?= count($roster) ?> <?= t('athlète(s)') ?> · <?= $nAlert ?> <?= t('en vigilance ou plus') ?></p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <input class="input h-9 w-56 text-sm" type="search" id="rosterSearch" placeholder="<?= h(t('Rechercher un athlète…')) ?>">
+        <a class="btn" data-variant="outline" data-size="sm" href="?p=coach&refresh=1" title="<?= h(t('Recalcule les indicateurs depuis les bases des athlètes')) ?>"><?= t('Actualiser') ?></a>
+      </div>
+    </div>
+
+    <?php if (!$roster): ?>
+    <div class="alert">
+      <h3><?= t('Aucun athlète pour l’instant.') ?></h3>
+      <p class="text-xs text-muted-foreground"><?= t('Chaque athlète génère son code dans Paramètres → Module coach : entre-le dans l’encadré coach de cette même page pour recevoir une demande d’accès.') ?></p>
+    </div>
+    <?php endif; ?>
+
+    <p id="rosterEmpty" class="hidden text-sm text-muted-foreground py-6"><?= t('Aucun athlète ne correspond à ta recherche.') ?></p>
+
+    <div id="rosterGrid" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+    <?php foreach ($roster as $r): $al = (int)($r['alert_level'] ?? 0); $lab = $ALERT[$al][0]; $cls = $ALERT[$al][1];
+          $ini = mb_strtoupper(mb_substr(trim((string)$r['name']) ?: '?', 0, 1));
+          $tsb = $r['tsb'] === null ? null : (float)$r['tsb'];
+          $lastAct = $r['last_activity'] ? substr((string)$r['last_activity'], 0, 10) : null;
+          $lastSync = $r['last_sync'] ? substr((string)$r['last_sync'], 0, 10) : null; ?>
+      <div class="card p-4 space-y-3" data-roster-card="<?= h(($r['name'] ?? '') . ' ' . ($r['email'] ?? '')) ?>">
+        <div class="flex items-start gap-3">
+          <span class="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground"><?= h($ini) ?></span>
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-sm font-semibold"><?= h((string)$r['name']) ?></p>
+            <p class="truncate text-xs text-muted-foreground"><?= h((string)$r['email']) ?></p>
+          </div>
+          <span class="badge <?= $cls ?>"><?= $lab ?></span>
+        </div>
+        <div class="grid grid-cols-4 gap-2 text-center">
+          <div class="rounded-lg border py-1.5"><p class="text-[10px] uppercase tracking-wide text-muted-foreground">CTL</p><p class="text-sm font-semibold tabular-nums"><?= $r['ctl'] !== null ? round((float)$r['ctl']) : '–' ?></p></div>
+          <div class="rounded-lg border py-1.5"><p class="text-[10px] uppercase tracking-wide text-muted-foreground">ATL</p><p class="text-sm font-semibold tabular-nums"><?= $r['atl'] !== null ? round((float)$r['atl']) : '–' ?></p></div>
+          <div class="rounded-lg border py-1.5"><p class="text-[10px] uppercase tracking-wide text-muted-foreground">TSB</p><p class="text-sm font-semibold tabular-nums <?= $tsb === null ? '' : ($tsb > 5 ? 'text-emerald-600 dark:text-emerald-400' : ($tsb < -10 ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400')) ?>"><?= $tsb === null ? '–' : ($tsb > 0 ? '+' : '') . round($tsb) ?></p></div>
+          <div class="rounded-lg border py-1.5"><p class="text-[10px] uppercase tracking-wide text-muted-foreground"><?= t('Charge 7 j') ?></p><p class="text-sm font-semibold tabular-nums"><?= ($r['tss_7j'] !== null && (int)$r['tss_7j'] > 0) ? (int)$r['tss_7j'] : '–' ?></p></div>
+        </div>
+        <div class="flex flex-wrap justify-between gap-x-4 gap-y-0.5 text-[11px] text-muted-foreground">
+          <span><?= t('Dernière séance') ?> : <b class="font-medium text-foreground/80"><?= $lastAct ?: '–' ?></b></span>
+          <?php if ($lastSync): ?><span><?= t('Dernier sync') ?> : <?= $lastSync ?></span><?php endif; ?>
+        </div>
+      </div>
+    <?php endforeach; ?>
+    </div>
+
+    <div class="flex justify-center py-2">
+      <button type="button" class="btn" data-variant="outline" data-size="sm" id="rosterMore"><?= t('Afficher plus') ?></button>
+    </div>
+
+    <script>
+    (function () {
+      const PER = 24;
+      let shown = PER;
+      const cards = Array.from(document.querySelectorAll('[data-roster-card]'));
+      const search = document.getElementById('rosterSearch');
+      const more = document.getElementById('rosterMore');
+      const empty = document.getElementById('rosterEmpty');
+      function apply() {
+        const s = (search && search.value || '').trim().toLowerCase();
+        let vis = 0;
+        cards.forEach(c => {
+          const ok = !s || (c.dataset.rosterCard || '').includes(s);
+          const show = ok && (s !== '' || vis < shown);
+          c.classList.toggle('hidden', !show);
+          if (show) vis++;
+        });
+        if (more) more.classList.toggle('hidden', s !== '' || shown >= cards.length);
+        if (empty) empty.classList.toggle('hidden', !(s !== '' && vis === 0));
+      }
+      search && search.addEventListener('input', apply);
+      more && more.addEventListener('click', () => { shown += PER; apply(); });
+      apply();
+    })();
     </script>
     <?php foot(); exit;
 }
