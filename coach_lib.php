@@ -383,10 +383,9 @@ function coach_plan_add(int $coachId, int $athleteId, string $date, string $spor
     $p = coach_open_db($athleteId);
     if (!$p) return false;
     $cols = 'date, sport, title, duration, distance, tss, notes' . ($structureJson !== null ? ', structure, profile, workout_id, tss_type, icu_text' : '');
-    $qs = '?,?,?,?,?,?,?' . ($structureJson !== null ? ',?,?,?,?,?,?' : '');
     $vals = [$date, $sport, $title, $durSec > 0 ? $durSec : null, $distM > 0 ? $distM : null, $tss, $notes];
     if ($structureJson !== null) $vals = array_merge($vals, [$structureJson, $profileJson, $workoutId, $tssType, $icuText]);
-    $st = $p->prepare("INSERT INTO planned_workouts($cols) VALUES ($qs)");
+    $st = $p->prepare('INSERT INTO planned_workouts(' . $cols . ') VALUES (' . rtrim(str_repeat('?,', count($vals)), ',') . ')');
     $st->execute($vals);
     $when = date('d/m', strtotime($date));
     $det = [];
