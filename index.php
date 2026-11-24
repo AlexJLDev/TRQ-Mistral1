@@ -5297,6 +5297,7 @@ if ($p === 'coach_athlete') {
       sel.addEventListener('change', () => {
         const w = WOLIB[sel.value];
         const f = sel.closest('form');
+        f.wo_id.value = w ? sel.value : '0';
         document.getElementById('woStructure').value = '';
         document.getElementById('woProfile').value = '';
         document.getElementById('woMode').value = 'power';

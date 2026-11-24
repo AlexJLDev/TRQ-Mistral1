@@ -379,12 +379,13 @@ function coach_plan_add(int $coachId, int $athleteId, string $date, string $spor
     if ($profileJson !== null && json_decode($profileJson, true) === null) $profileJson = null;
     if ($structureJson !== null && strlen($structureJson) > 200000) return false;
     $tssType = ($structureJson !== null && $mode === 'hr') ? 'hrtss' : 'power';
+    $icuText = $structureJson !== null ? coach_plan_text((string)$structureJson, $mode) : '';
     $p = coach_open_db($athleteId);
     if (!$p) return false;
-    $cols = 'date, sport, title, duration, distance, tss, notes' . ($structureJson !== null ? ', structure, profile, workout_id, tss_type' : '');
-    $qs = '?,?,?,?,?,?,?' . ($structureJson !== null ? ',?,?,?,?,?' : '');
+    $cols = 'date, sport, title, duration, distance, tss, notes' . ($structureJson !== null ? ', structure, profile, workout_id, tss_type, icu_text' : '');
+    $qs = '?,?,?,?,?,?,?' . ($structureJson !== null ? ',?,?,?,?,?,?' : '');
     $vals = [$date, $sport, $title, $durSec > 0 ? $durSec : null, $distM > 0 ? $distM : null, $tss, $notes];
-    if ($structureJson !== null) $vals = array_merge($vals, [$structureJson, $profileJson, $workoutId, $tssType]);
+    if ($structureJson !== null) $vals = array_merge($vals, [$structureJson, $profileJson, $workoutId, $tssType, $icuText]);
     $st = $p->prepare("INSERT INTO planned_workouts($cols) VALUES ($qs)");
     $st->execute($vals);
     $when = date('d/m', strtotime($date));
@@ -407,6 +408,33 @@ function coach_plan_del(int $coachId, int $athleteId, int $planId): bool {
     $st = $p->prepare('DELETE FROM planned_workouts WHERE id = ?');
     $st->execute([$planId]);
     return $st->rowCount() > 0;
+}
+
+/** Description texte de la séance (icu_text) générée côté serveur depuis la structure du builder → rend l'export intervals.icu disponible. */
+function coach_plan_text(string $structureJson, string $mode): string {
+    $st = json_decode($structureJson, true);
+    if (!is_array($st) || !$st) return '';
+    $u = $mode === 'hr' ? '% LTHR' : '% FTP';
+    $dur = function (int $s): string {
+        return $s % 60 === 0 ? intdiv($s, 60) . ' min' : rtrim(rtrim(number_format($s / 60, 1, '.', ' '), '0'), '.') . ' min';
+    };
+    $rng = function (array $s) use ($u): string {
+        $lo = (float)($s['lo'] ?? 100); $hi = (float)($s['hi'] ?? $lo);
+        return ($hi - $lo < 0.5 ? 'à ' . round($lo) : round($lo) . '–' . round($hi)) . ' ' . $u;
+    };
+    $lbl = ['warmup' => 'Échauffement', 'work' => 'Effort', 'rest' => 'Récupération', 'cooldown' => 'Retour au calme', 'steady' => 'Palier'];
+    $one = function (array $s) use ($lbl, $dur, $rng): string {
+        $k = (string)($s['kind'] ?? 'work');
+        return ($lbl[$k] ?? ($k === 'work' ? 'Effort' : $k)) . ' ' . $dur((int)($s['dur'] ?? 60)) . ' ' . $rng($s) . (!empty($s['ramp']) ? ' (en rampe)' : '');
+    };
+    $out = [];
+    foreach ($st as $b) {
+        if (isset($b['steps']) && is_array($b['steps'])) {
+            $reps = max(1, (int)($b['reps'] ?? 1));
+            $out[] = $reps . ' × [' . implode(' · ', array_map(fn($c) => $one((array)$c), $b['steps'])) . ']';
+        } else $out[] = $one((array)$b);
+    }
+    return implode("\n", $out);
 }
 
 /** Bibliothèque de séances structurées du coach (sa propre base) — légende + structures pour le select de planification. */
