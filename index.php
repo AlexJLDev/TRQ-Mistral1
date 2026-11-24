@@ -54,6 +54,27 @@ if ($p === 'settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Location: ?p=settings&saved=1');
         exit;
     }
+    /* Module coach : mini-formulaires dédiés (rôle, invitation, liens) — auth multi-comptes uniquement */
+    if (array_key_exists('coach_act', $_POST)) {
+        if (coach_enabled()) {
+            $meC = current_uid();
+            $actC = (string)$_POST['coach_act'];
+            try {
+                if ($actC === 'role') coach_role_toggle($meC);
+                elseif ($actC === 'invite') $_SESSION['coach_flash'] = coach_invite_create($meC);
+                elseif ($actC === 'invite_cancel') coach_invite_revoke($meC);
+                elseif ($actC === 'accept') coach_accept($meC, (int)($_POST['link_id'] ?? 0));
+                elseif ($actC === 'reject') coach_reject($meC, (int)($_POST['link_id'] ?? 0));
+                elseif ($actC === 'revoke') coach_revoke($meC, (int)($_POST['coach_id'] ?? 0));
+                elseif ($actC === 'join') $_SESSION['coach_flash_msg'] = coach_request_via_code($meC, (string)($_POST['code'] ?? ''));
+            } catch (Throwable $e) {
+                header('Location: ?p=settings&err=' . urlencode($e->getMessage()));
+                exit;
+            }
+        }
+        header('Location: ?p=settings&saved=1');
+        exit;
+    }
     foreach (['api_key', 'athlete_id', 'ftp', 'lthr', 'max_hr', 'rest_hr', 'base_hrv', 'weight', 'body_fat'] as $k) {
         cfg_set($k, trim($_POST[$k] ?? ''));
     }
@@ -4887,7 +4908,7 @@ if ($p === 'admin') {
       <?php foreach ($users as $u): $self = (int)$u['id'] === current_uid(); ?>
         <tr>
           <td><?= (int)$u['id'] ?></td><td class="font-medium"><?= h($u['name']) ?><?= $self ? ' <span class="badge" data-variant="secondary">vous</span>' : '' ?></td><td><?= h($u['email']) ?></td>
-          <td><span class="badge" data-variant="<?= $u['role'] === 'admin' ? 'default' : 'outline' ?>"><?= $u['role'] === 'admin' ? 'admin' : 'utilisateur' ?></span></td>
+          <td><span class="badge" data-variant="<?= $u['role'] === 'admin' ? 'default' : 'outline' ?>"><?= $u['role'] === 'admin' ? 'admin' : ($u['role'] === 'coach' ? 'coach' : 'utilisateur') ?></span></td>
           <td class="whitespace-nowrap text-xs"><?= h(substr((string)$u['created_at'], 0, 10)) ?></td>
           <td class="whitespace-nowrap text-xs"><?= $u['last_login'] ? h(substr((string)$u['last_login'], 0, 16)) : '–' ?></td>
           <td class="text-xs tabular-nums"><?= (int)$u['db_kb'] ?> Ko</td>
@@ -5345,7 +5366,7 @@ if ($p === 'settings') {
       <div class="card p-6 space-y-4">
         <header class="flex items-start justify-between gap-3">
           <div><h3 class="text-base font-semibold">Mon compte</h3>
-            <p class="text-xs text-muted-foreground"><?= h($cu['name']) ?> · <?= h($cu['email']) ?> · <?= $cu['role'] === 'admin' ? 'administrateur' : 'utilisateur' ?></p></div>
+            <p class="text-xs text-muted-foreground"><?= h($cu['name']) ?> · <?= h($cu['email']) ?> · <?= $cu['role'] === 'admin' ? 'administrateur' : ($cu['role'] === 'coach' ? 'coach' : 'utilisateur') ?></p></div>
           <form method="post" action="login.php?a=logout"><button class="btn" data-variant="outline" data-size="sm" type="submit">Se déconnecter</button></form>
         </header>
         <form method="post" enctype="multipart/form-data" action="?p=settings" class="flex flex-wrap items-center gap-3">
@@ -5514,6 +5535,94 @@ if ($p === 'settings') {
           </div>
         </div>
       </form>
+
+        <?php if (auth_enabled()): ?>
+        <?php $cuC = current_user(); $isCoach = coach_is_coach();
+              $myCoaches = coach_coached_by((int)$me['id']);
+              $pendingReq = coach_pending((int)$me['id']);
+              $myInvite = coach_invite_get((int)$me['id']);
+              $coachFlash = $_SESSION['coach_flash'] ?? null; if ($coachFlash !== null) unset($_SESSION['coach_flash']);
+              $coachMsg = $_SESSION['coach_flash_msg'] ?? null; if ($coachMsg !== null) unset($_SESSION['coach_flash_msg']); ?>
+        <div class="card p-6 space-y-4">
+          <header>
+            <h3 class="text-base font-semibold">Module coach</h3>
+            <p class="text-xs text-muted-foreground">Partage entraîneur/athlète : c'est toi qui invites, qui acceptes et qui peux révoquer à tout moment</p>
+          </header>
+
+          <?php if ($coachMsg): ?>
+            <div class="rounded-lg border px-3 py-2 text-sm <?= $coachMsg['ok'] ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive' ?>"><?= h((string)$coachMsg['msg']) ?></div>
+          <?php endif; ?>
+
+          <?php if ($coachFlash): ?>
+            <div class="rounded-lg border border-primary/40 bg-primary/5 px-3 py-3 space-y-1">
+              <p class="text-sm font-medium">Ton code d’invitation (valable 24 h) :</p>
+              <p class="font-mono text-2xl tracking-widest font-semibold"><?= h((string)$coachFlash['code']) ?></p>
+              <p class="text-xs text-muted-foreground">Communique-le à un seul coach : il l’entre de son côté, puis tu reçois une demande à accepter ci-dessous. Le code ne peut être utilisé qu’une fois.</p>
+            </div>
+          <?php endif; ?>
+
+          <?php if ($isCoach): ?>
+          <div class="rounded-lg border p-3 space-y-3">
+            <div class="flex flex-wrap items-center gap-3">
+              <span class="badge" data-variant="default">Coach</span>
+              <p class="text-xs text-muted-foreground flex-1 min-w-56">Ton compte a le rôle coach : le tableau de bord de pilotage de tes athlètes arrivera dans la prochaine brique du module.</p>
+              <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="role"><button class="btn" data-variant="outline" data-size="sm" type="submit">Ne plus être coach</button></form>
+            </div>
+            <form method="post" action="?p=settings" class="flex flex-wrap items-end gap-2">
+              <input type="hidden" name="coach_act" value="join">
+              <div class="field"><label class="text-xs font-medium" for="coachJoinCode">Rejoindre un athlète : entre son code d’invitation</label>
+                <input class="input h-9 w-40 font-mono uppercase tracking-widest text-sm" name="code" id="coachJoinCode" maxlength="6" placeholder="A7K3QZ" autocomplete="off" required></div>
+              <button class="btn" data-size="sm" type="submit">Envoyer la demande</button>
+            </form>
+          </div>
+          <?php else: ?>
+          <div class="flex flex-wrap items-center gap-3">
+            <p class="text-xs text-muted-foreground flex-1 min-w-56">Tu encordes des athlètes ? Passe ton compte en rôle coach pour pouvoir recevoir leurs données et suivre leur entraînement.</p>
+            <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="role"><button class="btn" data-variant="outline" data-size="sm" type="submit">Devenir coach</button></form>
+          </div>
+          <?php endif; ?>
+
+          <?php if ($pendingReq): ?>
+          <div class="space-y-2">
+            <p class="text-sm font-medium">Demandes d’accès à ton compte <span class="text-muted-foreground">(<?= count($pendingReq) ?>)</span></p>
+            <?php foreach ($pendingReq as $pr): ?>
+            <div class="flex flex-wrap items-center gap-2 rounded-lg border p-2.5">
+              <div class="min-w-0 flex-1"><p class="text-sm font-medium truncate"><?= h((string)$pr['name']) ?></p>
+                <p class="text-xs text-muted-foreground truncate"><?= h((string)$pr['email']) ?></p></div>
+              <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="accept"><input type="hidden" name="link_id" value="<?= (int)$pr['id'] ?>"><button class="btn" data-size="sm" type="submit">Accepter</button></form>
+              <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="reject"><input type="hidden" name="link_id" value="<?= (int)$pr['id'] ?>"><button class="btn" data-variant="ghost" data-size="sm" type="submit">Refuser</button></form>
+            </div>
+            <?php endforeach; ?>
+          </div>
+          <?php endif; ?>
+
+          <?php if ($myCoaches): ?>
+          <div class="space-y-2">
+            <p class="text-sm font-medium"><?= count($myCoaches) > 1 ? 'Tes coaches' : 'Ton coach' ?> <span class="text-muted-foreground">(<?= count($myCoaches) ?>)</span></p>
+            <?php foreach ($myCoaches as $mc): ?>
+            <div class="flex flex-wrap items-center gap-2 rounded-lg border p-2.5">
+              <div class="min-w-0 flex-1"><p class="text-sm font-medium truncate"><?= h((string)$mc['name']) ?></p>
+                <p class="text-xs text-muted-foreground truncate"><?= h((string)$mc['email']) ?> · accès total depuis <?= date('d/m/Y', (int)$mc['activated_at']) ?></p></div>
+              <form method="post" action="?p=settings" onsubmit="return confirm('Révoquer l’accès de ce coach ? Une fois révoqué, il ne voit plus rien de tes données.')"><input type="hidden" name="coach_act" value="revoke"><input type="hidden" name="coach_id" value="<?= (int)$mc['coach_id'] ?>"><button class="btn" data-variant="destructive" data-size="sm" type="submit">Révoquer</button></form>
+            </div>
+            <?php endforeach; ?>
+            <p class="text-[11px] text-muted-foreground">Un coach actif voit tout : séances, diagnostic, forme, récupération et planification. Tu peux le révoquer à tout instant — il ne conserve aucune copie.</p>
+          </div>
+          <?php endif; ?>
+
+          <?php if ($myInvite): $hrs = max(1, (int)ceil(((int)$myInvite['expires_at'] - time()) / 3600)); ?>
+          <div class="flex flex-wrap items-center gap-3 rounded-lg border p-2.5">
+            <p class="text-xs text-muted-foreground flex-1 min-w-56">Un code d’invitation est en cours (encore valable ≈ <?= $hrs ?> h). Il reste utilisable une fois par un coach.</p>
+            <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="invite_cancel"><button class="btn" data-variant="ghost" data-size="sm" type="submit">Annuler le code</button></form>
+          </div>
+          <?php else: ?>
+          <div class="flex flex-wrap items-center gap-3">
+            <p class="text-xs text-muted-foreground flex-1 min-w-56">Pour être suivi par un coach : génère un code et communique-le-lui (valable 24 h, usage unique).</p>
+            <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="invite"><button class="btn" data-size="sm" type="submit">Générer un code d’invitation</button></form>
+          </div>
+          <?php endif; ?>
+        </div>
+        <?php endif; ?>
 
     </div>
     <?php ?>

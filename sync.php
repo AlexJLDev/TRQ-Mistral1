@@ -64,6 +64,7 @@ try {
         $rem = (int)$pdo->query('SELECT COUNT(*) FROM activities WHERE synced=0')->fetchColumn();
         if ($created > 0) notif_add('sync', 'sync-' . uniqid(), t('Nouvelles séances synchronisées'),
             sprintf(t('%d nouvelle(s) séance(s) importée(s) depuis intervals.icu.'), $created), '?p=activities', 'good');
+        if ($created > 0) { try { coach_snapshot_refresh(current_uid()); } catch (Throwable $e) {} }   // module coach : rafraîchit le snapshot vu par le coach
         echo json_encode(['ok' => true, 'found' => $n, 'created' => $created, 'remaining' => $rem]);
 
     } elseif ($action === 'process') {
@@ -74,6 +75,7 @@ try {
             catch (Throwable $e) { error_log('process_activity: ' . $e->getMessage() . ' @ ' . basename($e->getFile()) . ':' . $e->getLine()); }
         }
         $rem = (int)$pdo->query('SELECT COUNT(*) FROM activities WHERE synced=0')->fetchColumn();
+        if ($rem === 0) { try { coach_snapshot_refresh(current_uid()); } catch (Throwable $e) {} }   // module coach : flux terminés, snapshot à jour
         echo json_encode(['ok' => true, 'remaining' => $rem]);
 
     } elseif ($action === 'recompute') {
