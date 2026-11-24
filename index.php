@@ -416,6 +416,13 @@ tr.lap-flash { animation: lapflash 1.6s ease-out; }
   .trq-sheet-item svg { width: 16px; height: 16px; flex: none; }
   @keyframes trqSheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
 }
+  /* ---------- Plein écran des graphes (analyse) : overlay fixe ; téléphone en portrait = « horizontal virtuel » (rotation CSS, l'utilisateur pivote l'appareil pour lire) ---------- */
+  .trq-no-scroll { overflow: hidden !important; }
+  .trq-fs-rot { position: fixed; inset: 0; z-index: 100; background: var(--background); overflow: auto; }
+  .trq-fs-rot .card { margin: .75rem; box-shadow: none; }
+  @media (orientation: portrait) {
+    .trq-fs-rot { top: 0; left: 100vw; right: auto; bottom: auto; width: 100vh; height: 100vw; transform: rotate(90deg); transform-origin: top left; }
+  }
 </style>
 </head>
 <body>
@@ -2216,7 +2223,7 @@ if ($p === 'activity') {
       <div id="sec-telemetrie" class="space-y-6 scroll-mt-24">
 
       <!-- Graphique Multi-Flux Télémétrique Moderne avec sélecteur de flux & Switcher Empilé / Unique -->
-      <div class="card">
+      <div class="card" id="telemetryCard">
         <header class="p-4 border-b flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div>
             <h3 class="text-base font-semibold">Télémétrie 1 Hz & Profil de l'effort</h3>
@@ -2275,8 +2282,12 @@ if ($p === 'activity') {
 
         <section class="p-4">
           <div class="flex items-center justify-between gap-2 mb-2 text-[11px] text-muted-foreground">
-            <span>Molette : zoom · Double-clic : dézoomer · Glisser : sélection d'un tour</span>
-            <button type="button" id="zoomReset" class="hidden shrink-0 px-2 py-0.5 rounded-md border hover:bg-muted" onclick="zoomReset()">Réinitialiser le zoom</button>
+            <span>Molette : zoom · Double-clic : dézoomer · Souris : glisser = sélection d'un tour · Tactile : glisser = lecture continue de l'info</span>
+            <div class="flex items-center gap-1 shrink-0">
+              <button type="button" id="selModeBtn" class="hidden px-2 py-0.5 rounded-md border hover:bg-muted" onclick="toggleSelMode()" title="Activer la sélection de tour au doigt">✂ Sélection au doigt</button>
+              <button type="button" id="zoomReset" class="hidden px-2 py-0.5 rounded-md border hover:bg-muted" onclick="zoomReset()">Réinitialiser le zoom</button>
+              <button type="button" class="px-2 py-0.5 rounded-md border hover:bg-muted" onclick="trqFsToggle('telemetryCard')" title="Graphique en pleine page (horizontal sur téléphone)">⛶ Plein écran</button>
+            </div>
           </div>
 
           <!-- 1. Conteneur Graphique Unique (Superposé) -->
@@ -2640,7 +2651,7 @@ if ($p === 'activity') {
       ?>
       <div class="grid lg:grid-cols-2 gap-6" id="pfcAnalyticsSection">
         <!-- 1. Puissance / FC dans le temps -->
-        <div class="card">
+        <div class="card" id="pfcCard">
           <header class="p-4 border-b">
             <h3 class="text-base font-semibold">Puissance/FC</h3>
             <div class="mt-1.5 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -2661,12 +2672,13 @@ if ($p === 'activity') {
             <?php endif; ?>
           </header>
           <section class="p-4">
+            <div class="flex justify-end"><button type="button" class="px-2 py-0.5 mb-1 rounded-md border text-[11px] hover:bg-muted" onclick="trqFsToggle('pfcCard')" title="Graphique en pleine page">⛶ Plein écran</button></div>
             <div class="h-64"><canvas id="chartPowerHrTime"></canvas></div>
           </section>
         </div>
 
         <!-- 2. Dérive puissance-FC (Premier vs Deuxième Moitié) -->
-        <div class="card">
+        <div class="card" id="driftCard">
           <header class="p-4 border-b text-center">
             <h3 class="text-base font-semibold text-left">Dérive puissance-FC</h3>
             <p class="mt-1 text-xs font-semibold">
@@ -2676,6 +2688,7 @@ if ($p === 'activity') {
             </p>
           </header>
           <section class="p-4">
+            <div class="flex justify-end"><button type="button" class="px-2 py-0.5 mb-1 rounded-md border text-[11px] hover:bg-muted" onclick="trqFsToggle('driftCard')" title="Graphique en pleine page">⛶ Plein écran</button></div>
             <div class="h-64"><canvas id="chartPowerHrDrift"></canvas></div>
           </section>
         </div>
@@ -2849,18 +2862,19 @@ if ($p === 'activity') {
 
       <!-- Graphique PDC de la séance vs Meilleure PDC 90j de la saison -->
       <div class="grid lg:grid-cols-2 gap-6">
-        <div class="card">
+        <div class="card" id="mmpCard">
           <header class="p-4 border-b">
             <h3 class="text-base font-semibold">MMP de la séance vs Record 90 jours</h3>
             <p class="text-xs text-muted-foreground">Comparaison de vos meilleurs efforts de la séance face à votre enveloppe de saison</p>
           </header>
           <section class="p-4">
+            <div class="flex justify-end"><button type="button" class="px-2 py-0.5 mb-1 rounded-md border text-[11px] hover:bg-muted" onclick="trqFsToggle('mmpCard')" title="Graphique en pleine page">⛶ Plein écran</button></div>
             <div class="h-64"><canvas id="mmpCompare"></canvas></div>
           </section>
         </div>
 
         <!-- Zones de puissance & Polarisation -->
-        <div class="card">
+        <div class="card" id="zonesCard">
           <header class="p-4 border-b flex items-center justify-between">
             <div>
               <h3 class="text-base font-semibold">Distribution temporelle des zones (Coggan)</h3>
@@ -2873,6 +2887,7 @@ if ($p === 'activity') {
             <?php endif; ?>
           </header>
           <section class="p-4">
+            <div class="flex justify-end"><button type="button" class="px-2 py-0.5 mb-1 rounded-md border text-[11px] hover:bg-muted" onclick="trqFsToggle('zonesCard')" title="Graphique en pleine page">⛶ Plein écran</button></div>
             <div class="h-64"><canvas id="zonesChart"></canvas></div>
           </section>
         </div>
@@ -3147,6 +3162,72 @@ if ($p === 'activity') {
             stats.innerHTML = out.join('');
         } catch (e) { stats.innerHTML = ''; msg.textContent = e.message; }
     }
+    /* ---------- Tactile : affichage continu de l'info sous le doigt ---------- */
+    function showTip(chart, ev) {
+        try {
+            const els = chart.getElementsAtEventForMode(ev, 'index', { intersect: false }, false);
+            if (!els.length) return;
+            chart.tooltip.setActiveElements(els.map(e => ({datasetIndex: e.datasetIndex, index: e.index})), {x: ev.clientX, y: ev.clientY});
+            chart.draw();
+        } catch (e) {}
+    }
+    let SEL_TOUCH = false;
+    function toggleSelMode() {
+        SEL_TOUCH = !SEL_TOUCH;
+        const b = document.getElementById('selModeBtn');
+        if (b) { b.classList.toggle('bg-primary/15', SEL_TOUCH); b.classList.toggle('font-semibold', SEL_TOUCH); }
+    }
+    if (window.matchMedia && matchMedia('(pointer:coarse)').matches) {
+        const sb = document.getElementById('selModeBtn'); if (sb) sb.classList.remove('hidden');
+    }
+
+    /* ---------- Plein écran des graphes : overlay fixe (PC = plein écran natif) ; sur téléphone en portrait, l'overlay pivote (lecture en horizontal) ---------- */
+    let trqFsState = null;
+    function trqFsFit() {
+        if (!trqFsState) return;
+        const {card, rot} = trqFsState;
+        const hh = rot.clientHeight || window.innerHeight;
+        const cvs = Array.from(card.querySelectorAll('canvas')).filter(cv => cv.offsetParent !== null);
+        if (!cvs.length) return;
+        const per = cvs.length > 1 ? Math.max(150, Math.round((hh - 140) / cvs.length)) : Math.max(200, Math.round(hh - 150));
+        cvs.forEach(cv => { const p = cv.parentElement; if (!p) return; if (p.dataset.prevH === undefined) p.dataset.prevH = p.style.height || ''; p.style.height = per + 'px'; });
+        window.dispatchEvent(new Event('resize'));
+    }
+    function trqFsToggle(cardId) {
+        const card = document.getElementById(cardId);
+        if (!card) return;
+        if (trqFsState) { trqFsExit(); return; }
+        const parent = card.parentElement, next = card.nextSibling;
+        const rot = document.createElement('div');
+        rot.className = 'trq-fs-rot';
+        parent.insertBefore(rot, card);
+        rot.appendChild(card);
+        document.body.appendChild(rot);
+        document.body.classList.add('trq-no-scroll');
+        trqFsState = {card, parent, next, rot};
+        trqFsFit();
+        try { if (card.requestFullscreen) card.requestFullscreen().catch(() => {}); } catch (e) {}
+        try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {}); } catch (e) {}
+        trqFsState.on = () => trqFsFit();
+        window.addEventListener('resize', trqFsState.on);
+        window.addEventListener('orientationchange', trqFsState.on);
+    }
+    function trqFsExit() {
+        if (!trqFsState) return;
+        const {card, parent, next, rot} = trqFsState;
+        window.removeEventListener('resize', trqFsState.on);
+        window.removeEventListener('orientationchange', trqFsState.on);
+        card.querySelectorAll('canvas').forEach(cv => { const p = cv.parentElement; if (p && p.dataset.prevH !== undefined) { p.style.height = p.dataset.prevH; delete p.dataset.prevH; } });
+        parent.insertBefore(card, next);
+        rot.remove();
+        document.body.classList.remove('trq-no-scroll');
+        try { if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {}); } catch (e) {}
+        try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (e) {}
+        window.dispatchEvent(new Event('resize'));
+        trqFsState = null;
+    }
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && trqFsState) trqFsExit(); });
+
     function attachSelection(chart) {
         chart.$sel = true; selCharts.push(chart);
         chart.$link = true; linkedCharts.push(chart);
@@ -3154,8 +3235,12 @@ if ($p === 'activity') {
         const cv = chart.canvas; cv.style.touchAction = 'pan-y'; cv.style.cursor = 'crosshair';
         let drag = null;
         const idx = ev => { const r = cv.getBoundingClientRect(); const v = chart.scales.x.getValueForPixel(ev.clientX - r.left); return Math.max(0, Math.min(labels.length - 1, Math.round(v))); };
-        cv.addEventListener('pointerdown', ev => { if (ev.button !== 0) return; drag = idx(ev); SEL = {a: drag * step, b: drag * step}; cv.setPointerCapture(ev.pointerId); });
-        cv.addEventListener('pointermove', ev => { if (drag === null) return; const b = idx(ev); SEL = {a: Math.min(drag, b) * step, b: Math.max(drag, b) * step}; selRedraw(); });
+        cv.addEventListener('pointerdown', ev => { if (ev.button !== 0 || (ev.pointerType !== 'mouse' && !SEL_TOUCH)) return; drag = idx(ev); SEL = {a: drag * step, b: drag * step}; cv.setPointerCapture(ev.pointerId); });
+        cv.addEventListener('pointermove', ev => {
+            if (drag === null) { if (ev.pointerType !== 'mouse') showTip(chart, ev); return; }
+            const b = idx(ev); SEL = {a: Math.min(drag, b) * step, b: Math.max(drag, b) * step}; selRedraw();
+            if (ev.pointerType !== 'mouse') showTip(chart, ev);          // tactile : info continue pendant la sélection aussi
+        });
         const end = () => {
             if (drag === null) return; drag = null;
             if (!SEL || SEL.b - SEL.a < 5) { selClear(); return; }       // simple clic = désélection
