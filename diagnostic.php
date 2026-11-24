@@ -201,6 +201,12 @@ function activity_diagnostic(array $a, array $S, array $laps, string $lapSource,
         $add('load', 10, 'info', 'Séance de ' . dg_dur($dur) . ($km > 0 ? ' sur ' . dg_n($km, 1) . ' km' : '') . ' : pas assez de données de puissance ou de fréquence cardiaque pour un diagnostic détaillé.');
     }
 
+    /* Profil athlète (Paramètres) : calibre les lectures « niveau » des textes */
+    $prof = athlete_profile();
+    $lvIdx = athlete_level_idx($prof['level']);
+    $lvLab = ['debutant' => 'débutant', 'intermediaire' => 'intermédiaire', 'confirme' => 'confirmé', 'élite' => 'élite', 'pro' => 'pro'][$prof['level']];
+    $tssK = [0.7, 0.85, 1.0, 1.2, 1.4][$lvIdx];
+
     /* ---------- 8. Résumé narratif (style coach, une relecture de la séance) ---------- */
     $narrative = '';
     {
@@ -209,10 +215,12 @@ function activity_diagnostic(array $a, array $S, array $laps, string $lapSource,
         elseif ($avgHr)      $wh = dg_dur($dur) . ' à ' . (int)round($avgHr) . ' bpm';
         else                 $wh = dg_dur($dur);
         $lv = fn(string $topic) => isset($ins[$topic]) ? $ins[$topic]['level'] : null;
+        // seuils de « type de sortie » calibrés selon le niveau déclaré (un débutant à 200 TSS ≠ un pro à 200 TSS)
+        $ka = (int)round(40 * $tssK); $kb = (int)round(150 * $tssK); $kc = (int)round(250 * $tssK);
         $kind = $structured ? 'Séance de travail structuré'
             : ($tss === null ? 'Séance'
-            : ($tss < 40 ? 'Sortie de récupération'
-            : ($tss < 150 ? 'Sortie endurance' : ($tss < 250 ? 'Grosse sortie' : 'Sortie très éprouvante'))));
+            : ($tss < $ka ? 'Sortie de récupération'
+            : ($tss < $kb ? 'Sortie endurance' : ($tss < $kc ? 'Grosse sortie' : 'Sortie très éprouvante'))));
         // adjectif de force selon l'intensité et la durée
         $qual = '';
         if (!$structured) {
@@ -263,14 +271,22 @@ function activity_diagnostic(array $a, array $S, array $laps, string $lapSource,
         $how = isset($ins['record']) ? 'tu as battu un de tes records, chapeau !'
             : ($warnN > 0 ? 'des signes de fatigue sont apparus en fin de séance — c’est normal sur ce type d’effort, mais ne les ignore pas'
             : ($goodN > 0 ? 'tout s’est bien passé du début à la fin, très propre' : 'rien d’anormal à signaler'));
-        // 3. Ce qu’il faut faire ensuite
+        // Lecture au regard du niveau déclaré dans les Paramètres
+        $bigDay = [120, 160, 220, 300, 380][$lvIdx];
+        $profTxt = '';
+        if ($tss !== null && $tss >= $bigDay)
+            $profTxt = ' au vu de ton profil (' . $lvLab . '), c’est une grosse séance : la forme monte vite sur ce type d’effort, mais donne à ton corps le temps de récupérer.';
+        elseif ($tss !== null && $tss > 0 && $tss < $bigDay * 0.35)
+            $profTxt = ' séance douce au regard de ton profil (' . $lvLab . ') : parfait pour construire la base sans te griller.';
+        // 3. Ce qu’il faut faire ensuite (seuils calibrés selon le niveau)
+        $ns = array_map(fn($v) => (int)round($v * $tssK), [40, 80, 150, 250]);
         $next = $tss === null ? ''
-            : ($tss < 40 ? ' Pas de récupération spéciale nécessaire.'
-            : ($tss < 80 ? ' Une bonne nuit de sommeil suffit pour récupérer.'
-            : ($tss < 150 ? ' Bois et mange dans l’heure qui suit, et garde une journée tranquille demain si possible.'
-            : ($tss < 250 ? ' Demain, privilégie le repos ou une sortie très légère.'
+            : ($tss < $ns[0] ? ' Pas de récupération spéciale nécessaire.'
+            : ($tss < $ns[1] ? ' Une bonne nuit de sommeil suffit pour récupérer.'
+            : ($tss < $ns[2] ? ' Bois et mange dans l’heure qui suit, et garde une journée tranquille demain si possible.'
+            : ($tss < $ns[3] ? ' Demain, privilégie le repos ou une sortie très légère.'
             : ' Accorde-toi deux jours faciles : ton corps a besoin de récupérer.'))));
-        $simple = 'En clair : ' . $what . '. ' . ucfirst($how) . '.' . ($next);
+        $simple = 'En clair : ' . $what . '. ' . ucfirst($how) . '.' . $profTxt . ($next);
     }
 
     uasort($ins, fn($x, $y) => $y['p'] <=> $x['p']);
@@ -286,6 +302,19 @@ function activity_diagnostic(array $a, array $S, array $laps, string $lapSource,
    diagnostic de séance : un texte court style coach + une version
    « en clair » sans jargon pour débuter.
    ============================================================ */
+/** Profil athlète déclaré dans les Paramètres : niveau (débutant→pro) + disciplines pratiquées. */
+function athlete_profile(): array {
+    $lv = (string)cfg('profile_level', 'intermediaire');
+    if (!in_array($lv, ['debutant', 'intermediaire', 'confirme', 'elite', 'pro'], true)) $lv = 'intermediaire';
+    $sp = array_values(array_intersect(['road', 'mtb', 'run', 'tri'], array_map('trim', explode(',', (string)cfg('profile_sports', 'road')))));
+    return ['level' => $lv, 'sports' => $sp];
+}
+
+/** Rang du niveau déclaré (0 débutant → 4 pro), utilisé pour calibrer les seuils des textes. */
+function athlete_level_idx(string $lv): int {
+    return ['debutant' => 0, 'intermediaire' => 1, 'confirme' => 2, 'elite' => 3, 'pro' => 4][$lv] ?? 1;
+}
+
 function form_narrative(?string $sport = null): array {
     $pm = pmc($sport);
     if (!$pm) return [];
@@ -297,6 +326,15 @@ function form_narrative(?string $sport = null): array {
     $prevCtl = isset($keys[count($keys) - 8]) ? (float)$pm[$keys[count($keys) - 8]]['ctl'] : $ctl;
     $ctlDelta = $ctl - $prevCtl;                   // évolution de la forme sur 7 jours
     $r = $atl > 0 ? $atl / max($ctl, 1) : 0.0;     // fatigue / forme
+
+    /* Profil athlète : plus le niveau est bas, plus tôt on alerte sur la fatigue et le volume */
+    $prof = athlete_profile();
+    $lvIdx = athlete_level_idx($prof['level']);
+    $rWarn = [1.2, 1.3, 1.4, 1.5, 1.5][$lvIdx];
+    $rBad = [1.4, 1.5, 1.6, 1.7, 1.7][$lvIdx];
+    $weekBig = [300, 450, 650, 850, 1100][$lvIdx];
+    $weekLow = [80, 150, 250, 350, 500][$lvIdx];
+    $lvLab = ['debutant' => 'débutant', 'intermediaire' => 'intermédiaire', 'confirme' => 'confirmé', 'élite' => 'élite', 'pro' => 'pro'][$prof['level']];
 
     $pdo = db();
     $since = date('Y-m-d', strtotime('-7 days'));
@@ -322,8 +360,8 @@ function form_narrative(?string $sport = null): array {
     $sleepH = $sleep7 ? round(array_sum($sleep7) / count($sleep7) / 3600, 1) : null;
 
     /* ---------- Phrases (vocabulaire courant, pas de jargon) ---------- */
-    $fatigue = $r > 1.5 ? 'tu portes beaucoup trop de fatigue par rapport à ta forme'
-        : ($r > 1.3 ? 'tu portes pas mal de fatigue : c’est une vraie phase de charge'
+    $fatigue = $r > $rBad ? 'tu portes beaucoup trop de fatigue par rapport à ta forme'
+        : ($r > $rWarn ? 'tu portes pas mal de fatigue : c’est une vraie phase de charge'
         : ($r > 0.8 ? 'tu portes une fatigue normale d’entraînement'
         : 'tu récupères : ta fatigue est basse par rapport à ta forme'));
 
@@ -357,6 +395,8 @@ function form_narrative(?string $sport = null): array {
 
     $week = $nb7 > 0
         ? 'cette semaine : ' . $tss7 . ' TSS en ' . $nb7 . ' séance' . ($nb7 > 1 ? 's' : '') . ' (' . fmt_dur((int)($w7['d'] ?? 0)) . ')'
+          . ($tss7 >= $weekBig ? ' — gros volume pour un ' . $lvLab . ' : la régularité passe avant le volume, surveille ta récupération'
+          : ($tss7 < $weekLow ? ' — semaine allégée, utile pour absorber l’entraînement' : ''))
         : 'aucune séance enregistrée depuis 7 jours';
 
     $kind = $tsb > 25 ? 'Pleine fraîcheur'
@@ -364,7 +404,9 @@ function form_narrative(?string $sport = null): array {
         : ($tsb > -10 ? 'Rythme régulier'
         : ($tsb > -30 ? 'Belle charge d’entraînement' : 'Corps sous charge lourde')));
 
-    $next = ($r > 1.5 || $tsb < -30) ? 'En priorité, mets une vraie journée de repos au planning, même si tu te sens bien.'
+    $tri = in_array('tri', $prof['sports'], true) && $nb7 > 0 ? ' Pense à répartir la charge entre les 3 disciplines (natation, vélo, course).'
+        : (count($prof['sports']) > 1 ? ' Alterne bien tes disciplines pour équilibrer la charge.' : '');
+    $next = ($r >= $rBad || $tsb < -30) ? 'En priorité, mets une vraie journée de repos au planning, même si tu te sens bien.'
         : ($hrvDelta !== null && $hrvDelta <= -8 ? 'En priorité, dors et mange bien pendant 2-3 jours avant de remonter l’intensité.'
         : ($nb7 === 0 ? 'En priorité, remets un peu de mouvement cette semaine, même une sortie courte.'
         : ($tsb > 5 && $r <= 1.05 ? 'En priorité, profite-en pour mettre une belle séance de qualité.'
@@ -374,9 +416,9 @@ function form_narrative(?string $sport = null): array {
     $simple = 'En clair : ' . $fatigue . ' — ' . $fresh . '. ' . ucfirst($week)
         . ($hrv ? '. ' . ucfirst($hrv) : '')
         . ($sleep ? ' ' . $sleep : '')
-        . '. ' . $next;
+        . '. ' . $next . $tri;
 
-    $level = ($r > 1.5 || $tsb < -30 || ($hrvDelta !== null && $hrvDelta <= -8)) ? 'warn'
+    $level = ($r >= $rBad || $tsb < -30 || ($hrvDelta !== null && $hrvDelta <= -8)) ? 'warn'
         : (($tsb > 5 && $r <= 1.05) || ($hrvDelta !== null && $hrvDelta >= 3 && $r < 1.4) ? 'good' : 'info');
 
     return ['level' => $level, 'main' => $main, 'simple' => $simple];

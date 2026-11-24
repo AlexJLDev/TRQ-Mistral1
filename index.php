@@ -65,6 +65,11 @@ if ($p === 'settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if (preg_match('/^(\d+):(\d{2})$/', trim($_POST['run_thr_pace'] ?? ''), $m)) {
         cfg_set('run_thr_pace', (string)($m[1] * 60 + $m[2]));
     }
+    /* Profil athlète : niveau + disciplines — calibrent les diagnostics, la forme du jour et les conseils */
+    $lv = (string)($_POST['profile_level'] ?? '');
+    if (in_array($lv, ['debutant', 'intermediaire', 'confirme', 'elite', 'pro'], true)) cfg_set('profile_level', $lv);
+    $sp = array_values(array_intersect((array)($_POST['profile_sports'] ?? []), ['road', 'mtb', 'run', 'tri']));
+    cfg_set('profile_sports', implode(',', $sp));
     header('Location: ?p=settings&saved=1');
     exit;
 }
@@ -5294,6 +5299,33 @@ if ($p === 'settings') {
           </div>
         </div>
         <?php endif; ?>
+
+        <div class="card p-6 space-y-4">
+          <header>
+            <h3 class="text-base font-semibold">Profil athlète</h3>
+            <p class="text-xs text-muted-foreground">Personnalise les diagnostics et les conseils du coach selon ton expérience et tes disciplines</p>
+          </header>
+          <div class="grid sm:grid-cols-2 gap-4">
+            <div class="field">
+              <label class="text-xs font-medium" for="profileLevel">Niveau</label>
+              <select id="profileLevel" name="profile_level" class="select h-9 text-sm">
+                <?php foreach (['debutant' => 'Débutant', 'intermediaire' => 'Intermédiaire', 'confirme' => 'Confirmé', 'elite' => 'Élite', 'pro' => 'Pro'] as $k => $l): ?>
+                  <option value="<?= $k ?>"<?= cfg('profile_level', 'intermediaire') === $k ? ' selected' : '' ?>><?= $l ?></option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+            <div class="field">
+              <label class="text-xs font-medium">Disciplines</label>
+              <div class="flex flex-wrap gap-x-4 gap-y-2 text-sm">
+                <?php $curSports = array_map('trim', explode(',', (string)cfg('profile_sports', 'road'))); ?>
+                <?php foreach (['road' => 'Vélo route', 'mtb' => 'VTT', 'run' => 'Course à pied', 'tri' => 'Triathlon'] as $k => $l): ?>
+                  <label class="flex items-center gap-1.5"><input type="checkbox" name="profile_sports[]" value="<?= $k ?>"<?= in_array($k, $curSports, true) ? ' checked' : '' ?>> <?= $l ?></label>
+                <?php endforeach; ?>
+              </div>
+            </div>
+          </div>
+          <p class="text-[11px] text-muted-foreground">Utilisé par la carte « Ta forme du jour » et le diagnostic des sorties : seuils de charge et conseils adaptés à ton niveau (un 300 TSS sur une sortie ne veut pas dire la même chose pour un débutant et un pro). Les calculs physiologiques (CTL, ATL, TSB) restent inchangés.</p>
+        </div>
 
         <div class="card p-6 space-y-4">
           <header>
