@@ -95,6 +95,37 @@ if ($p === 'settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
+/* ---------- Post planification coach (le coach écrit dans le calendrier de l'athlète) ---------- */
+if ($p === 'coach_athlete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (coach_enabled() && coach_is_coach()) {
+        $cid = current_uid();
+        $pid = (int)($_POST['athlete_id'] ?? 0);
+        if ($pid > 0 && coach_is_active($cid, $pid)) {
+            $act = (string)($_POST['coach_plan_act'] ?? '');
+            try {
+                if ($act === 'add') {
+                    $ok = coach_plan_add($cid, $pid, trim((string)($_POST['date'] ?? '')), (string)($_POST['sport'] ?? 'ride'),
+                        trim((string)($_POST['title'] ?? '')) ?: t('Séance planifiée'),
+                        (int)($_POST['duration_min'] ?? 0) * 60, (float)($_POST['distance_km'] ?? 0) * 1000,
+                        isset($_POST['tss']) && trim((string)$_POST['tss']) !== '' ? (float)$_POST['tss'] : null,
+                        trim((string)($_POST['notes'] ?? '')));
+                    header('Location: ?p=coach_athlete&id=' . $pid . ($ok ? '&plan=1' : '&plan=0'));
+                    exit;
+                } elseif ($act === 'del') {
+                    coach_plan_del($cid, $pid, (int)($_POST['plan_id'] ?? 0));
+                    header('Location: ?p=coach_athlete&id=' . $pid . '&plan=1');
+                    exit;
+                }
+            } catch (Throwable $e) {
+                header('Location: ?p=coach_athlete&id=' . $pid . '&err=' . urlencode($e->getMessage()));
+                exit;
+            }
+        }
+    }
+    header('Location: ?p=coach');
+    exit;
+}
+
 /* ---------- Post Wellness rapide ---------- */
 if ($p === 'wellness' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $d = trim($_POST['date'] ?? date('Y-m-d'));
@@ -5152,6 +5183,71 @@ if ($p === 'coach_athlete') {
         <?php endforeach; ?>
         </tbody></table></div>
       <?php endif; ?>
+    </div>
+
+    <?php $plans = coach_plan_list($aid); ?>
+    <?php if (isset($_GET['err'])): ?>
+      <div class="alert" data-variant="destructive"><h2><?= h((string)$_GET['err']) ?></h2></div>
+    <?php elseif (isset($_GET['plan'])): ?>
+      <div class="alert"><h2><?= $_GET['plan'] === '0' ? t('La séance n’a pas pu être ajoutée.') : t('Séance planifiée ajoutée dans le calendrier de ton athlète.') ?></h2></div>
+    <?php endif; ?>
+
+    <div class="card">
+      <section class="p-4 pb-0"><h3 class="text-sm font-semibold"><?= t('Séances planifiées (à venir)') ?></h3>
+        <p class="text-xs text-muted-foreground"><?= t('Elles apparaissent dans le calendrier de ton athlète, avec les rappels habituels.') ?></p></section>
+      <?php if (!$plans): ?><p class="p-4 text-sm text-muted-foreground"><?= t('Aucune séance planifiée pour l’instant.') ?></p>
+      <?php else: ?>
+      <div class="table-container border-0"><table class="table">
+        <thead><tr><th><?= t('Date') ?></th><th><?= t('Séance') ?></th><th><?= t('Durée') ?></th><th><?= t('Charge') ?></th><th><?= t('Notes') ?></th><th></th></tr></thead>
+        <tbody>
+        <?php foreach ($plans as $pl): ?>
+          <tr>
+            <td class="whitespace-nowrap text-xs text-muted-foreground"><?= h(date('d/m', strtotime((string)$pl['date']))) ?></td>
+            <td><div class="font-medium text-sm"><?= h((string)$pl['title']) ?></div><div class="mt-0.5"><?= sport_badge((string)$pl['sport']) ?></div></td>
+            <td class="tabular-nums text-xs"><?= $pl['duration'] ? fmt_dur((int)$pl['duration']) : '–' ?></td>
+            <td class="tabular-nums text-xs"><?= $pl['tss'] !== null && (float)$pl['tss'] > 0 ? n((float)$pl['tss'], 0) : '–' ?></td>
+            <td class="text-xs text-muted-foreground"><?= $pl['notes'] ? h((string)$pl['notes']) : '–' ?></td>
+            <td class="text-right">
+              <form method="post" action="?p=coach_athlete" onsubmit="return confirm('<?php echo t('Supprimer') ?> ?')">
+                <input type="hidden" name="coach_plan_act" value="del">
+                <input type="hidden" name="athlete_id" value="<?= $aid ?>">
+                <input type="hidden" name="plan_id" value="<?= (int)$pl['id'] ?>">
+                <button class="btn" data-variant="ghost" data-size="sm" type="submit"><?= t('Supprimer') ?></button>
+              </form>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody></table></div>
+      <?php endif; ?>
+    </div>
+
+    <div class="card">
+      <section class="p-4 pb-0"><h3 class="text-sm font-semibold"><?= t('Planifier une séance') ?></h3>
+        <p class="text-xs text-muted-foreground"><?= t('Elle sera visible par l’athlète dès l’enregistrement.') ?></p></section>
+      <form method="post" action="?p=coach_athlete" class="p-4 grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+        <input type="hidden" name="coach_plan_act" value="add">
+        <input type="hidden" name="athlete_id" value="<?= $aid ?>">
+        <label class="text-xs font-medium space-y-1"><span><?= t('Date') ?></span>
+          <input class="input" type="date" name="date" required value="<?= date('Y-m-d') ?>"></label>
+        <label class="text-xs font-medium space-y-1"><span><?= t('Discipline') ?></span>
+          <select class="input" name="sport">
+            <option value="ride"><?= t('Vélo') ?></option>
+            <option value="run"><?= t('Course à pied') ?></option>
+            <option value="swim"><?= t('Natation') ?></option>
+            <option value="other"><?= t('Autre') ?></option>
+          </select></label>
+        <label class="text-xs font-medium space-y-1 col-span-2"><span><?= t('Titre') ?></span>
+          <input class="input" type="text" name="title" maxlength="120" placeholder="<?= h(t('Séance planifiée')) ?>"></label>
+        <label class="text-xs font-medium space-y-1"><span><?= t('Durée (min)') ?></span>
+          <input class="input" type="number" name="duration_min" min="0" max="600" value="60"></label>
+        <label class="text-xs font-medium space-y-1"><span><?= t('Distance (km)') ?></span>
+          <input class="input" type="number" name="distance_km" min="0" max="500" step="0.1"></label>
+        <label class="text-xs font-medium space-y-1"><span>TSS</span>
+          <input class="input" type="number" name="tss" min="0" max="500" step="1"></label>
+        <label class="text-xs font-medium space-y-1 col-span-2 md:col-span-1"><span><?= t('Notes') ?></span>
+          <input class="input" type="text" name="notes" maxlength="255" placeholder="<?= h(t('optionnel')) ?>"></label>
+        <div class="col-span-2 md:col-span-1"><button class="btn w-full" data-size="sm" type="submit"><?= t('Planifier') ?></button></div>
+      </form>
     </div>
 
     <script>

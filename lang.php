@@ -1164,6 +1164,17 @@ function trq_i18n(): array {
     'Demande envoyée à ' => 'Request sent to ',
     ' — elle sera effective dès qu’il l’accepte.' => ' — it will take effect once they accept it.',
     'Une demande est déjà en attente pour cet athlète.' => 'A request is already pending for this athlete.',
+    'Planification' => 'Planning',
+    'Planifier une séance' => 'Schedule a workout',
+    'Séances planifiées (à venir)' => 'Upcoming planned workouts',
+    'Elles apparaissent dans le calendrier de ton athlète, avec les rappels habituels.' => 'They appear in your athlete’s calendar, with the usual reminders.',
+    'Aucune séance planifiée pour l’instant.' => 'No planned workouts yet.',
+    'Elle sera visible par l’athlète dès l’enregistrement.' => 'It becomes visible to the athlete as soon as it is saved.',
+    'Titre' => 'Title',
+    'optionnel' => 'optional',
+    'Séance planifiée ajoutée dans le calendrier de ton athlète.' => 'Planned workout added to your athlete’s calendar.',
+    'La séance n’a pas pu être ajoutée.' => 'The workout could not be added.',
+    'Ton coach a planifié une séance' => 'Your coach scheduled a workout',
     ];
     return $d;
 }

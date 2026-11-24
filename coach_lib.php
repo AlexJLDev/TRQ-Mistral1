@@ -334,3 +334,66 @@ function coach_roster(int $coachId): array {
     $st->execute([$coachId]);
     return $st->fetchAll();
 }
+
+/* ---------- planification (le coach écrit dans planned_workouts de l'athlète) ---------- */
+
+/** Écrit une notification directement dans la base de l'ATHLÈTE (notif_add écrit dans la base du courant : fausse ici). */
+function coach_notify_athlete(int $athleteId, string $type, string $ref, string $title, string $body = '', string $link = '', string $level = 'info'): void {
+    $p = coach_open_db($athleteId);
+    if (!$p) return;
+    try {
+        $p->prepare('INSERT INTO notifications(ts, type, ref, level, title, body, link, read_at)
+            VALUES (?,?,?,?,?,?,?,NULL)
+            ON CONFLICT(type, ref) DO UPDATE SET
+                ts = excluded.ts, level = excluded.level, title = excluded.title,
+                body = excluded.body, link = excluded.link, read_at = NULL')
+            ->execute([time(), $type, $ref, $level, $title, $body, $link]);
+    } catch (\Throwable $e) { /* la table notifications n'existe pas encore chez cet athlète : pas grave */ }
+}
+
+/** Prochaines séances planifiées de l'athlète (30 par défaut). */
+function coach_plan_list(int $athleteId, int $limit = 30): array {
+    $p = coach_open_db($athleteId);
+    if (!$p) return [];
+    try {
+        return $p->query("SELECT id, date, sport, title, duration, distance, tss, notes FROM planned_workouts WHERE date >= date('now') ORDER BY date LIMIT " . max(1, min(100, $limit)))->fetchAll();
+    } catch (\Throwable $e) {
+        return [];
+    }
+}
+
+/**
+ * Ajoute une séance planifiée dans la base de l'ATHLÈTE + notif dédiée (l'athlète la voit
+ * dans son calendrier existant, reçoit le rappel J-1/J existant, et cette notif) .
+ * $durSec en secondes, $distM en mètres (conventions du calendrier).
+ */
+function coach_plan_add(int $coachId, int $athleteId, string $date, string $sport, string $title,
+                        int $durSec = 0, float $distM = 0.0, ?float $tss = null, string $notes = ''): bool {
+    if (!coach_is_active($coachId, $athleteId)) return false;
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) !== 1) return false;
+    if (!in_array($sport, ['ride', 'run', 'swim', 'other'], true)) $sport = 'ride';
+    $p = coach_open_db($athleteId);
+    if (!$p) return false;
+    $st = $p->prepare('INSERT INTO planned_workouts(date, sport, title, duration, distance, tss, notes) VALUES (?,?,?,?,?,?,?)');
+    $st->execute([$date, $sport, $title, $durSec > 0 ? $durSec : null, $distM > 0 ? $distM : null, $tss, $notes]);
+    $when = date('d/m', strtotime($date));
+    $det = [];
+    if ($durSec > 0) $det[] = sprintf('%dh%02d', intdiv($durSec, 3600), intdiv($durSec % 3600, 60));
+    if ($distM > 0) $det[] = sprintf('%.1f km', $distM / 1000);
+    if ($tss !== null && $tss > 0) $det[] = sprintf('%.0f TSS', $tss);
+    coach_notify_athlete($athleteId, 'coach_plan', 'coach-plan-' . uniqid(),
+        'Ton coach a planifié une séance',
+        $title . ' — ' . $when . ($det ? ' · ' . implode(' · ', $det) : ''),
+        '?p=calendar', 'info');
+    return true;
+}
+
+/** Supprime une séance planifiée de l'athlète (le coach doit avoir un lien actif). */
+function coach_plan_del(int $coachId, int $athleteId, int $planId): bool {
+    if (!coach_is_active($coachId, $athleteId) || $planId <= 0) return false;
+    $p = coach_open_db($athleteId);
+    if (!$p) return false;
+    $st = $p->prepare('DELETE FROM planned_workouts WHERE id = ?');
+    $st->execute([$planId]);
+    return $st->rowCount() > 0;
+}
