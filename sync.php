@@ -30,7 +30,8 @@ try {
             (id,date,type,sport,name,duration,distance,elev,avg_hr,max_hr,avg_speed,avg_w,icu_load)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
-                name=excluded.name, duration=excluded.duration, distance=excluded.distance, elev=excluded.elev,
+                name=CASE WHEN activities.name_custom=1 THEN activities.name ELSE excluded.name END,
+                duration=excluded.duration, distance=excluded.distance, elev=excluded.elev,
                 avg_hr=excluded.avg_hr, max_hr=excluded.max_hr, avg_speed=excluded.avg_speed,
                 avg_w=excluded.avg_w, icu_load=excluded.icu_load,
                 tss=CASE WHEN activities.tss_type=\'load\' THEN excluded.icu_load ELSE activities.tss END');
@@ -144,7 +145,7 @@ try {
         $rid = (string)($_POST['id'] ?? '');
         $rname = trim((string)($_POST['name'] ?? ''));
         if ($rid === '' || $rname === '' || mb_strlen($rname) > 120) throw new RuntimeException('Nom invalide.');
-        db()->prepare('UPDATE activities SET name=? WHERE id=?')->execute([$rname, $rid]);
+        db()->prepare('UPDATE activities SET name=?, name_custom=1 WHERE id=?')->execute([$rname, $rid]);
         echo json_encode(['ok' => true, 'name' => $rname]);
 
     } elseif ($action === 'activity_feel') {
