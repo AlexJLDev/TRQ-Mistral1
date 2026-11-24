@@ -37,6 +37,7 @@ function coach_schema(): void {
     CREATE INDEX IF NOT EXISTS idx_cl_coach ON coach_links(coach_id, status);
     CREATE TABLE IF NOT EXISTS coach_invites(
         athlete_id INTEGER PRIMARY KEY,
+        code TEXT,
         code_hash TEXT NOT NULL,
         expires_at INTEGER NOT NULL,
         created_at INTEGER);
@@ -47,6 +48,7 @@ function coach_schema(): void {
         last_activity TEXT, last_sync TEXT,
         alert_level INTEGER NOT NULL DEFAULT 0,   /* 0 sain | 1 attention | 2 surmenage | 3 inactif */
         computed_at INTEGER);");
+    try { auth_db()->exec('ALTER TABLE coach_invites ADD COLUMN code TEXT'); } catch (\Throwable $e) { } // bases créées avant le stockage du code en clair
 }
 
 /* ---------- rôles ---------- */
@@ -77,7 +79,9 @@ function coach_role_toggle(int $uid): string {
 
 /* ---------- code d'invitation (généré par l'athlète) ---------- */
 
-/** Crée (ou remplace) le code d'invitation de l'athlète. Retourne le code en clair (jamais stocké tel quel). */
+/** Crée (ou remplace) le code d'invitation de l'athlète. Le code est stocké en clair pour pouvoir être réaffiché :
+ *  il expiré de toute façon à 24 h et n'est utilisable qu'une fois, et l'athlète doit de surcroît ACCEPTER la demande
+ *  (le code seul ne donne aucun accès). Conservation du hash pour compat avec une migration éventuelle. */
 function coach_invite_create(int $athleteId): array {
     coach_schema();
     $pool = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans I, O, 1, 0 (ambigus à la lecture)
@@ -85,19 +89,19 @@ function coach_invite_create(int $athleteId): array {
     for ($i = 0; $i < 6; $i++) $code .= $pool[random_int(0, strlen($pool) - 1)];
     $exp = time() + 86400;
     auth_db()->prepare(
-        'INSERT INTO coach_invites(athlete_id, code_hash, expires_at, created_at) VALUES (?,?,?,?)
-         ON CONFLICT(athlete_id) DO UPDATE SET code_hash = excluded.code_hash, expires_at = excluded.expires_at, created_at = excluded.created_at'
-    )->execute([$athleteId, hash('sha256', $code), $exp, time()]);
+        'INSERT INTO coach_invites(athlete_id, code, code_hash, expires_at, created_at) VALUES (?,?,?,?,?)
+         ON CONFLICT(athlete_id) DO UPDATE SET code = excluded.code, code_hash = excluded.code_hash, expires_at = excluded.expires_at, created_at = excluded.created_at'
+    )->execute([$athleteId, $code, hash('sha256', $code), $exp, time()]);
     return ['code' => $code, 'expires' => $exp];
 }
 
-/** Invite en cours d'un athlète : ['expires_at' => int] ou null. Ne restitue jamais le code en clair. */
+/** Invite en cours d'un athlète : ['code', 'expires_at'] ou null. */
 function coach_invite_get(int $athleteId): ?array {
     coach_schema();
-    $st = auth_db()->prepare('SELECT expires_at FROM coach_invites WHERE athlete_id = ? AND expires_at > ?');
+    $st = auth_db()->prepare('SELECT code, expires_at FROM coach_invites WHERE athlete_id = ? AND expires_at > ?');
     $st->execute([$athleteId, time()]);
     $r = $st->fetch();
-    return $r ? ['expires_at' => (int)$r['expires_at']] : null;
+    return $r ? ['code' => (string)$r['code'], 'expires_at' => (int)$r['expires_at']] : null;
 }
 
 function coach_invite_revoke(int $athleteId): void {
@@ -113,8 +117,8 @@ function coach_invite_lookup(string $code): ?array {
     $st = auth_db()->prepare(
         'SELECT i.athlete_id, i.expires_at, u.name FROM coach_invites i
          JOIN users u ON u.id = i.athlete_id AND u.active = 1
-         WHERE i.code_hash = ?');
-    $st->execute([hash('sha256', $code)]);
+         WHERE i.code = ? OR (i.code IS NULL AND i.code_hash = ?)');
+    $st->execute([$code, hash('sha256', $code)]);
     $r = $st->fetch();
     if (!$r || (int)$r['expires_at'] < time()) return null;
     return ['athlete_id' => (int)$r['athlete_id'], 'athlete_name' => (string)$r['name']];
