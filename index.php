@@ -7,8 +7,74 @@ ob_start('csrf_inject_cb');                  // ajoute le jeton CSRF à tous les
 $p = $_GET['p'] ?? 'dashboard';
 $pdo = db();
 
+/* ---------- Notifications in-app : génération throttlée (30 min) des alertes/objectifs/records/rappels ---------- */
+if ($p !== 'avatar') {
+    try { notif_generate(); } catch (Throwable $e) {}
+    $notifUnread = notif_unread();
+} else {
+    $notifUnread = 0;
+}
+$nNotifs = ($p !== 'avatar') ? notif_latest(40) : [];
+
+/* ---------- Photo de profil servie depuis auth.sqlite ---------- */
+if ($p === 'avatar') {
+    $st = auth_db()->prepare('SELECT avatar, avatar_mime FROM users WHERE id=?');
+    $st->execute([current_uid()]);
+    $row = $st->fetch();
+    $blob = $row && $row['avatar'] !== null ? (is_resource($row['avatar']) ? stream_get_contents($row['avatar']) : (string)$row['avatar']) : null;
+    if ($blob === null || $blob === '') { http_response_code(404); exit; }
+    header('Content-Type: ' . ($row['avatar_mime'] ?: 'application/octet-stream'));
+    header('Content-Length: ' . strlen($blob));
+    header('Cache-Control: private, max-age=86400');
+    echo $blob;
+    exit;
+}
+
 /* ---------- Paramètres POST ---------- */
 if ($p === 'settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    /* Photo de profil : mini-formulaire dédié (upload ou suppression) */
+    if (array_key_exists('avatar_post', $_POST)) {
+        try {
+            if (array_key_exists('avatar_remove', $_POST)) {
+                auth_db()->prepare('UPDATE users SET avatar=NULL, avatar_mime=NULL, avatar_ts=NULL WHERE id=?')->execute([current_uid()]);
+            } else {
+                [$blob, $mime] = avatar_process($_FILES['avatar_file'] ?? []);
+                auth_db()->prepare('UPDATE users SET avatar=?, avatar_mime=?, avatar_ts=? WHERE id=?')->execute([$blob, $mime, time(), current_uid()]);
+            }
+            header('Location: ?p=settings&saved=1');
+        } catch (RuntimeException $e) {
+            header('Location: ?p=settings&err=' . urlencode($e->getMessage()));
+        }
+        exit;
+    }
+    /* Sélecteur de langue : mini-formulaire dédié (ne touche pas aux autres réglages) */
+    if (array_key_exists('lang', $_POST) && !array_key_exists('api_key', $_POST)) {
+        $lang = trim($_POST['lang']);
+        if (array_key_exists($lang, trq_langs())) cfg_set('lang', $lang);
+        header('Location: ?p=settings&saved=1');
+        exit;
+    }
+    /* Module coach : mini-formulaires dédiés (rôle, invitation, liens) — auth multi-comptes uniquement */
+    if (array_key_exists('coach_act', $_POST)) {
+        if (coach_enabled()) {
+            $meC = current_uid();
+            $actC = (string)$_POST['coach_act'];
+            try {
+                if ($actC === 'role') coach_role_toggle($meC);
+                elseif ($actC === 'invite') $_SESSION['coach_flash'] = coach_invite_create($meC);
+                elseif ($actC === 'invite_cancel') coach_invite_revoke($meC);
+                elseif ($actC === 'accept') coach_accept($meC, (int)($_POST['link_id'] ?? 0));
+                elseif ($actC === 'reject') coach_reject($meC, (int)($_POST['link_id'] ?? 0));
+                elseif ($actC === 'revoke') coach_revoke($meC, (int)($_POST['coach_id'] ?? 0));
+                elseif ($actC === 'join') $_SESSION['coach_flash_msg'] = coach_request_via_code($meC, (string)($_POST['code'] ?? ''));
+            } catch (Throwable $e) {
+                header('Location: ?p=settings&err=' . urlencode($e->getMessage()));
+                exit;
+            }
+        }
+        header('Location: ?p=settings&saved=1');
+        exit;
+    }
     foreach (['api_key', 'athlete_id', 'ftp', 'lthr', 'max_hr', 'rest_hr', 'base_hrv', 'weight', 'body_fat'] as $k) {
         cfg_set($k, trim($_POST[$k] ?? ''));
     }
@@ -20,7 +86,72 @@ if ($p === 'settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if (preg_match('/^(\d+):(\d{2})$/', trim($_POST['run_thr_pace'] ?? ''), $m)) {
         cfg_set('run_thr_pace', (string)($m[1] * 60 + $m[2]));
     }
+    /* Profil athlète : niveau + disciplines — calibrent les diagnostics, la forme du jour et les conseils */
+    $lv = (string)($_POST['profile_level'] ?? '');
+    if (in_array($lv, ['debutant', 'intermediaire', 'confirme', 'elite', 'pro'], true)) cfg_set('profile_level', $lv);
+    $sp = array_values(array_intersect((array)($_POST['profile_sports'] ?? []), ['road', 'mtb', 'run', 'tri']));
+    cfg_set('profile_sports', implode(',', $sp));
     header('Location: ?p=settings&saved=1');
+    exit;
+}
+
+/* ---------- Post planification coach (le coach écrit dans le calendrier de l'athlète) ---------- */
+if ($p === 'coach_athlete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (coach_enabled() && coach_is_coach()) {
+        $cid = current_uid();
+        $pid = (int)($_POST['athlete_id'] ?? 0);
+        if ($pid > 0 && coach_is_active($cid, $pid)) {
+            $act = (string)($_POST['coach_plan_act'] ?? '');
+            try {
+                if ($act === 'add') {
+                    /* séance structurée : structure/profile copiés depuis la bibliothèque du coach (séances en % → portable entre athlètes) */
+                    $woId = (int)($_POST['wo_id'] ?? 0); $structure = null; $profile = null; $mode = 'power';
+                    if ($woId > 0) {
+                        $rw = db()->prepare('SELECT mode, structure, profile FROM workouts WHERE id = ?');
+                        $rw->execute([$woId]); $wo = $rw->fetch();
+                        if ($wo) { $structure = (string)$wo['structure']; $profile = (string)$wo['profile']; $mode = ($wo['mode'] ?? '') === 'hr' ? 'hr' : 'power'; }
+                        else $woId = 0;
+                    }
+                    $ok = coach_plan_add($cid, $pid, trim((string)($_POST['date'] ?? '')), (string)($_POST['sport'] ?? 'ride'),
+                        trim((string)($_POST['title'] ?? '')) ?: t('Séance planifiée'),
+                        (int)($_POST['duration_min'] ?? 0) * 60, (float)($_POST['distance_km'] ?? 0) * 1000,
+                        isset($_POST['tss']) && trim((string)$_POST['tss']) !== '' ? (float)$_POST['tss'] : null,
+                        trim((string)($_POST['notes'] ?? '')), $structure, $profile, $woId ?: null, $mode);
+                    header('Location: ?p=coach_athlete&id=' . $pid . ($ok ? '&plan=1' : '&plan=0'));
+                    exit;
+                } elseif ($act === 'del') {
+                    coach_plan_del($cid, $pid, (int)($_POST['plan_id'] ?? 0));
+                    header('Location: ?p=coach_athlete&id=' . $pid . '&plan=1');
+                    exit;
+                }
+            } catch (Throwable $e) {
+                header('Location: ?p=coach_athlete&id=' . $pid . '&err=' . urlencode($e->getMessage()));
+                exit;
+            }
+        }
+    }
+    header('Location: ?p=coach');
+    exit;
+}
+
+/* ---------- Post commentaire coach sur une séance de l'athlète ---------- */
+if (($p === 'coach_athlete' || $p === 'coach_activity') && $_SERVER['REQUEST_METHOD'] === 'POST'
+    && array_key_exists('coach_cmt_act', $_POST)) {
+    if (coach_enabled() && coach_is_coach()) {
+        $cid = current_uid();
+        $pid = (int)($_POST['athlete_id'] ?? 0);
+        $actId = trim((string)($_POST['activity_id'] ?? ''));
+        $back = $p === 'coach_athlete' ? '?p=coach_athlete&id=' . $pid : '?p=coach_activity&aid=' . $pid . '&id=' . urlencode($actId);
+        try {
+            coach_comment_add($cid, $pid, $actId, (string)($_POST['body'] ?? ''));
+            header('Location: ' . $back . '&cmt=1');
+            exit;
+        } catch (Throwable $e) {
+            header('Location: ' . $back . '&err=' . urlencode($e->getMessage()));
+            exit;
+        }
+    }
+    header('Location: ?p=coach');
     exit;
 }
 
@@ -54,7 +185,46 @@ if ($p === 'wellness' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
+/* ---------- Notes du calendrier : types prédéfinis ---------- */
+$NOTE_TYPES = [
+    'off'     => ['🏖️', 'Congé', 'bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30'],
+    'injury'  => ['🩹', 'Blessure', 'bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30'],
+    'rest'    => ['😴', 'Repos', 'bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/30'],
+    'travel'  => ['✈️', 'Voyage', 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30'],
+    'sick'    => ['🤒', 'Maladie', 'bg-pink-500/15 text-pink-700 dark:text-pink-300 border-pink-500/30'],
+    'race'    => ['🏁', 'Compétition', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'],
+    'custom'  => ['📝', 'Personnalisée', 'bg-slate-500/15 text-slate-700 dark:text-slate-300 border-slate-500/30'],
+];
+
 /* ---------- Post Workout rapide ---------- */
+if ($p === 'calendar' && $_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['note_save'])) {
+    $s = (string)($_POST['note_start'] ?? '');
+    $e = (string)($_POST['note_end'] ?? '');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $s)) $s = date('Y-m-d');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $e) || $e < $s) $e = $s;
+    $type = (string)($_POST['note_type'] ?? 'custom');
+    if (!isset($NOTE_TYPES[$type])) $type = 'custom';
+    $label = trim((string)($_POST['note_label'] ?? ''));
+    $notes = trim((string)($_POST['note_text'] ?? ''));
+    if (mb_strlen($label) > 60) $label = mb_substr($label, 0, 60);
+    if (mb_strlen($notes) > 500) $notes = mb_substr($notes, 0, 500);
+    if ($type === 'custom' && $label === '') {
+        header('Location: ?p=calendar&note=0&m=' . substr($s, 0, 7));
+        exit;
+    }
+    $ins = $pdo->prepare('INSERT INTO calendar_notes (start_date, end_date, type, label, notes, created_at) VALUES (?,?,?,?,?,?)');
+    $ins->execute([$s, $e, $type, $label, $notes, time()]);
+    header('Location: ?p=calendar&note=1&m=' . substr($s, 0, 7));
+    exit;
+}
+if ($p === 'calendar' && $_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['note_del'])) {
+    $nid = (int)($_POST['note_id'] ?? 0);
+    $nm = (string)($_POST['note_m'] ?? date('Y-m'));
+    if (!preg_match('/^\d{4}-\d{2}$/', $nm)) $nm = date('Y-m');
+    if ($nid > 0) $pdo->prepare('DELETE FROM calendar_notes WHERE id = ?')->execute([$nid]);
+    header('Location: ?p=calendar&note=1&m=' . $nm);
+    exit;
+}
 if ($p === 'calendar' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $d = trim($_POST['date'] ?? date('Y-m-d'));
     $sport = trim($_POST['sport'] ?? 'ride');
@@ -150,30 +320,32 @@ function render_goals_grid(array $gs): void {
 }
 
 function readiness_badge(?float $score): string {
-    if ($score === null) return '<span class="badge" data-variant="outline">Non renseigné</span>';
-    if ($score >= 80) return '<span class="badge bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">Optimal (' . round($score) . ')</span>';
-    if ($score >= 65) return '<span class="badge bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30">Bon (' . round($score) . ')</span>';
-    if ($score >= 50) return '<span class="badge bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">Modéré (' . round($score) . ')</span>';
-    return '<span class="badge" data-variant="destructive">Récup. requise (' . round($score) . ')</span>';
+    if ($score === null) return '<span class="badge" data-variant="outline">' . t('Non renseigné') . '</span>';
+    if ($score >= 80) return '<span class="badge bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">' . t('Optimal (') . round($score) . ')</span>';
+    if ($score >= 65) return '<span class="badge bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30">' . t('Bon (') . round($score) . ')</span>';
+    if ($score >= 50) return '<span class="badge bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">' . t('Modéré (') . round($score) . ')</span>';
+    return '<span class="badge" data-variant="destructive">' . t('Récup. requise (') . round($score) . ')</span>';
 }
 
 function head(string $title, string $active): void {
+    global $notifUnread, $nNotifs;             // badge notifs rendu côté serveur (sinon null dans cette fonction)
     $nav = [
-        'dashboard' => ['Tableau de bord', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>'],
-        'activities' => ['Activités', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>'],
-        'calendar' => ['Calendrier', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>'],
-        'power' => ['Courbes de puissance', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>'],
-        'workouts' => ['Entraînements', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h.01M3 12h.01M3 17h.01"/><path d="M8 7h13M8 12h13M8 17h13"/></svg>'],
-        'admin' => ['Administration', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'],
-        'wellness' => ['Wellness & Santé', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>'],
-        'nutrition' => ['Nutrition', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>'],
-        'progress' => ['Progression', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>'],
-        'zones' => ['Zones', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'],
-        'settings' => ['Paramètres', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'],
+        'dashboard' => [t('Tableau de bord'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>'],
+        'activities' => [t('Activités'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>'],
+        'calendar' => [t('Calendrier'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>'],
+        'power' => [t('Courbes de puissance'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>'],
+        'workouts' => [t('Entraînements'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h.01M3 12h.01M3 17h.01"/><path d="M8 7h13M8 12h13M8 17h13"/></svg>'],
+        'admin' => [t('Administration'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'],
+        'wellness' => [t('Wellness & Santé'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>'],
+        'nutrition' => [t('Nutrition'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>'],
+        'progress' => [t('Progression'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>'],
+        'zones' => [t('Zones'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'],
+        'coach' => [t('Mes athlètes'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="15" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'],
+        'settings' => [t('Paramètres'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'],
     ];
     ?>
 <!doctype html>
-<html lang="fr" class="antialiased">
+<html lang="<?= trq_lang() ?>" class="antialiased">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -333,6 +505,7 @@ tr.lap-flash { animation: lapflash 1.6s ease-out; }
     background: var(--primary); color: var(--primary-foreground);
     font-size: 11px; font-weight: 600;
   }
+  .dock-ava img { width: 100%; height: 100%; border-radius: 999px; object-fit: cover; display: block; }
   #mobileSheet.trq-open { display: block; position: fixed; inset: 0; z-index: 60; }
   body.trq-sheet-open { overflow: hidden; }
   .trq-sheet-bg { position: absolute; inset: 0; background: rgba(0, 0, 0, .5); }
@@ -364,6 +537,13 @@ tr.lap-flash { animation: lapflash 1.6s ease-out; }
   .trq-sheet-item svg { width: 16px; height: 16px; flex: none; }
   @keyframes trqSheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
 }
+  /* ---------- Plein écran des graphes (analyse) : overlay fixe ; téléphone en portrait = « horizontal virtuel » (rotation CSS, l'utilisateur pivote l'appareil pour lire) ---------- */
+  .trq-no-scroll { overflow: hidden !important; }
+  .trq-fs-rot { position: fixed; inset: 0; z-index: 100; background: var(--background); overflow: auto; }
+  .trq-fs-rot .card { margin: .75rem; box-shadow: none; }
+  @media (orientation: portrait) {
+    .trq-fs-rot { top: 0; left: 100vw; right: auto; bottom: auto; width: 100vh; height: 100vw; transform: rotate(90deg); transform-origin: top left; }
+  }
 </style>
 </head>
 <body>
@@ -400,11 +580,12 @@ tr.lap-flash { animation: lapflash 1.6s ease-out; }
 </script>
 <?php
 $groups = [
-    'Analyse'     => ['dashboard', 'activities', 'calendar'],
-    'Performance' => ['power', 'workouts', 'zones', 'progress'],
-    'Santé'       => ['wellness', 'nutrition'],
-    'Compte'      => array_merge(['settings'], (auth_enabled() && is_admin()) ? ['admin'] : []),
+    t('Analyse')     => ['dashboard', 'activities', 'calendar'],
+    t('Performance') => ['power', 'workouts', 'zones', 'progress'],
+    t('Santé')       => ['wellness', 'nutrition'],
+    t('Compte')      => array_merge(['settings'], (auth_enabled() && is_admin()) ? ['admin'] : []),
 ];
+if (coach_enabled() && coach_is_coach()) $groups[t('Pilotage')] = ['coach'];   // module coach : onglet réservé au rôle coach
 ?>
 <aside id="sidebar" class="sidebar" data-side="left">
   <nav aria-label="Navigation principale">
@@ -427,10 +608,11 @@ $groups = [
       <?php endforeach; ?>
     </section>
     <footer>
-      <?php $cu = current_user(); $ini = mb_strtoupper(mb_substr(trim((string)($cu['name'] ?? '?')) ?: '?', 0, 1)); ?>
+      <?php $cu = current_user(); $ini = mb_strtoupper(mb_substr(trim((string)($cu['name'] ?? '?')) ?: '?', 0, 1)); $av = avatar_info(); ?>
       <div class="flex items-center gap-2 px-2 py-1">
         <a href="?p=settings" class="flex min-w-0 flex-1 items-center gap-2 -m-1 rounded-md p-1 transition hover:bg-muted" title="Mes paramètres">
-          <span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"><?= h($ini) ?></span>
+          <?php if ($av): ?><img class="size-8 shrink-0 rounded-full object-cover" alt="" src="?p=avatar&v=<?= (int)$av['ts'] ?>"><?php else: ?>
+          <span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"><?= h($ini) ?></span><?php endif; ?>
           <div class="min-w-0 flex-1 leading-tight">
             <p class="truncate text-sm font-medium"><?= h($cu['name'] ?? '') ?></p>
             <p class="truncate text-[11px] text-muted-foreground">FTP <?= h(cfg('ftp', '–')) ?> W<?= cfg('weight') ? ' · ' . h(cfg('weight')) . ' kg' : '' ?></p>
@@ -462,6 +644,19 @@ $groups = [
       <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
       <span class="hidden sm:inline">Synchroniser</span>
     </button>
+    <div class="relative" id="notifWrap">
+      <button class="btn relative" data-variant="ghost" data-size="icon-sm" id="notifBtn" aria-label="Notifications">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+        <span id="notifBadge" class="<?= $notifUnread > 0 ? '' : 'hidden' ?> absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white"><?= $notifUnread > 0 ? $notifUnread : '' ?></span>
+      </button>
+      <div id="notifPanel" class="hidden absolute right-0 top-full z-40 mt-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border bg-popover shadow-lg">
+        <div class="flex items-center justify-between border-b px-3 py-2">
+          <span class="text-sm font-semibold"><?= h(t('Notifications')) ?></span>
+          <button type="button" id="notifReadAll" class="text-xs text-muted-foreground hover:underline"><?= h(t('Tout marquer lu')) ?></button>
+        </div>
+        <div id="notifList" class="max-h-80 overflow-y-auto"></div>
+      </div>
+    </div>
     <button class="btn" data-variant="ghost" data-size="icon-sm" id="themeBtn" aria-label="Basculer thème">
       <svg class="w-4 h-4 dark:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
       <svg class="w-4 h-4 hidden dark:block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2m-7.07-14.07 1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32 1.41-1.41"/></svg>
@@ -482,13 +677,14 @@ $groups = [
 <?php }
 
 function foot(): void { ?>
+  <?php global $NOTE_TYPES, $nNotifs, $notifUnread; // rendu dans foot() : les variables top-level ne sont pas en portée dans une fonction ?>
   </div>
 </main>
 
 <?php if (!empty($GLOBALS['trq_nav'])): [$trqNav, $trqGroups, $trqActive] = $GLOBALS['trq_nav']; [$trqCu, $trqIni] = $GLOBALS['trq_user'] ?? ['', '?']; ?>
 <nav id="mobileDock" aria-label="Navigation mobile">
   <a href="?p=settings" class="dock-btn" title="Mes paramètres">
-    <span class="dock-ava"><?= h($trqIni) ?></span>
+    <span class="dock-ava"><?php if (!empty($GLOBALS['trq_user'][0]) && avatar_info()): ?><img alt="" src="?p=avatar&v=<?= (int)avatar_info()['ts'] ?>"><?php else: ?><?= h($trqIni) ?><?php endif; ?></span>
   </a>
   <?php foreach (['dashboard', 'activities', 'calendar', 'progress'] as $trqK): [$trqL, $trqIco] = $trqNav[$trqK]; ?>
   <a href="?p=<?= $trqK ?>" class="dock-btn<?= $trqActive === $trqK ? ' is-active' : '' ?>" aria-label="<?= h($trqL) ?>"<?= $trqActive === $trqK ? ' aria-current="page"' : '' ?>><?= $trqIco ?></a>
@@ -686,6 +882,56 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') trqSheet(fal
   </div>
 </dialog>
 
+<!-- Modal Note calendrier -->
+<dialog class="dialog" id="modal-note"
+        onpointerdown="this.dataset.backdropPress = event.target === this"
+        onclick="if (event.target === this && this.dataset.backdropPress === 'true') this.close()">
+  <div class="sm:max-w-md w-full">
+    <header class="flex items-center justify-between pb-3 border-b mb-4">
+      <div>
+        <h3 class="text-base font-semibold"><?= t('Ajouter une note au calendrier') ?></h3>
+        <p class="text-xs text-muted-foreground"><?= t('Congé, blessure, repos…') ?></p>
+      </div>
+      <button type="button" class="btn" data-variant="ghost" data-size="icon" onclick="this.closest('dialog').close()">✕</button>
+    </header>
+    <section>
+      <form method="post" action="?p=calendar" class="space-y-4">
+        <input type="hidden" name="note_save" value="1">
+        <div class="grid grid-cols-2 gap-3">
+          <div class="field">
+            <label class="text-xs font-medium"><?= t('Du') ?></label>
+            <input class="input text-sm" type="date" name="note_start" id="note-start" value="<?= date('Y-m-d') ?>" required>
+          </div>
+          <div class="field">
+            <label class="text-xs font-medium"><?= t('Au') ?></label>
+            <input class="input text-sm" type="date" name="note_end" id="note-end" value="<?= date('Y-m-d') ?>" required>
+          </div>
+        </div>
+        <div class="field">
+          <label class="text-xs font-medium"><?= t('Type') ?></label>
+          <select class="select text-sm" name="note_type" onchange="document.getElementById('noteLabelWrap').classList.toggle('hidden', this.value !== 'custom')">
+            <?php foreach ($NOTE_TYPES as $nKey => $nT): ?>
+              <option value="<?= h($nKey) ?>"><?= $nT[0] ?> <?= h(t($nT[1])) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div class="field hidden" id="noteLabelWrap">
+          <label class="text-xs font-medium"><?= t('Libellé personnalisé') ?></label>
+          <input class="input text-sm" type="text" name="note_label" maxlength="60" placeholder="<?= h(t('Ex : stage, vacances, examen…')) ?>">
+        </div>
+        <div class="field">
+          <label class="text-xs font-medium"><?= t('Détail (facultatif)') ?></label>
+          <textarea class="textarea text-sm" name="note_text" rows="2" maxlength="500" placeholder="<?= h(t('Précisions…')) ?>"></textarea>
+        </div>
+        <footer class="flex items-center justify-end gap-2 pt-2 border-t">
+          <button class="btn" data-variant="outline" type="button" onclick="this.closest('dialog').close()"><?= t('Annuler') ?></button>
+          <button class="btn" type="submit"><?= t('Ajouter au calendrier') ?></button>
+        </footer>
+      </form>
+    </section>
+  </div>
+</dialog>
+
 <script>
 function openWorkoutModal(dateStr = '') {
     if (dateStr) {
@@ -693,6 +939,13 @@ function openWorkoutModal(dateStr = '') {
         if (inp) inp.value = dateStr;
     }
     const d = document.getElementById('modal-workout');
+    if (d) d.showModal();
+}
+
+function openNoteModal(dateStr = '') {
+    const s = document.getElementById('note-start'), e = document.getElementById('note-end');
+    if (dateStr && s) { s.value = dateStr; if (e) e.value = dateStr; }
+    const d = document.getElementById('modal-note');
     if (d) d.showModal();
 }
 
@@ -716,6 +969,104 @@ document.getElementById('themeBtn').onclick = () => {
     location.reload();
 };
 
+/* ---------- Notifications in-app : cloche, panneau, badge, toasts ---------- */
+const NOTIF0 = <?= json_encode($nNotifs, JSON_UNESCAPED_UNICODE) ?>;
+const NOTIF_NS = {
+    items: (NOTIF0) ? NOTIF0 : [],
+    maxSeen: 0,
+    lvlCol: {good: 'bg-emerald-500', info: 'bg-sky-500', warn: 'bg-amber-500', crit: 'bg-red-500'},
+    fmtAgo(ts) {
+        const en = document.documentElement.lang === 'en';
+        let d = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+        if (d < 60) return en ? 'just now' : 'à l’instant';
+        if (d < 3600) { const m = Math.floor(d / 60); return en ? m + ' min ago' : 'il y a ' + m + ' min'; }
+        if (d < 86400) { const h = Math.floor(d / 3600); return en ? h + 'h ago' : 'il y a ' + h + ' h'; }
+        const j = Math.floor(d / 86400); return en ? j + (j > 1 ? ' days ago' : ' day ago') : 'il y a ' + j + ' j';
+    },
+    render(list) {
+        this.items = list;
+        const box = document.getElementById('notifList');
+        if (!box) return;
+        if (!list.length) { box.innerHTML = '<p class="px-3 py-6 text-center text-xs text-muted-foreground">' + (document.documentElement.lang === 'en' ? 'No notifications' : 'Aucune notification') + '</p>'; }
+        else {
+            box.innerHTML = '';
+            for (const n of list) {
+                const col = this.lvlCol[n.level] || this.lvlCol.info;
+                const el = document.createElement('button');
+                el.type = 'button';
+                el.className = 'block w-full border-b px-3 py-2.5 text-left last:border-b-0 hover:bg-muted/60 ' + (n.read_at ? 'opacity-55' : '');
+                el.dataset.nid = n.id;
+                el.innerHTML = '<span class="flex items-start gap-2">'
+                    + '<span class="mt-1 inline-block size-2 shrink-0 rounded-full ' + col + '"></span>'
+                    + '<span class="min-w-0 flex-1">'
+                    + '<span class="flex items-baseline justify-between gap-2"><span class="truncate text-xs font-semibold">' + this.esc(n.title) + '</span>'
+                    + '<span class="shrink-0 text-[10px] text-muted-foreground">' + this.fmtAgo(+n.ts) + '</span></span>'
+                    + (n.body ? '<span class="mt-0.5 block text-[11px] leading-snug text-muted-foreground">' + this.esc(n.body) + '</span>' : '')
+                    + '</span></span>';
+                el.onclick = () => this.open(n);
+                box.appendChild(el);
+            }
+        }
+    },
+    esc(s) { const d = document.createElement('span'); d.textContent = (s ?? '') + ''; return d.innerHTML; },
+    badge(count) {
+        const b = document.getElementById('notifBadge');
+        if (!b) return;
+        if (count > 0) { b.classList.remove('hidden'); b.textContent = count; }
+        else b.classList.add('hidden');
+    },
+    async refresh(announce) {
+        try {
+            const j = await call('notif_list');
+            this.badge(j.unread);
+            const fresh = (j.items || []).filter(n => !n.read_at && n.id > this.maxSeen);
+            this.render(j.items || []);
+            const top = (j.items || [])[0];
+            if (top) this.maxSeen = Math.max(this.maxSeen, top.id);
+            if (announce) for (const n of fresh.slice(0, 3)) this.toast(n);
+        } catch (e) {}
+    },
+    async open(n) {
+        try { if (!n.read_at) { await call('notif_read', {id: n.id}); this.badge(this.badgeCount() - 1); } } catch (e) {}
+        document.getElementById('notifPanel').classList.add('hidden');
+        if (n.link) location.href = n.link;
+        else this.refresh(false);
+    },
+    badgeCount() { const b = document.getElementById('notifBadge'); if (!b || b.classList.contains('hidden')) return 0; return +b.textContent || 0; },
+    toast(n) {
+        let host = document.getElementById('trqToasts');
+        if (!host) {
+            host = document.createElement('div');
+            host.id = 'trqToasts';
+            host.className = 'fixed bottom-4 right-4 z-50 flex w-72 flex-col gap-2';
+            document.body.appendChild(host);
+        }
+        const col = this.lvlCol[n.level] || this.lvlCol.info;
+        const t = document.createElement('div');
+        t.className = 'rounded-lg border bg-popover px-3 py-2 shadow-lg';
+        t.innerHTML = '<span class="flex items-start gap-2"><span class="mt-1 inline-block size-2 shrink-0 rounded-full ' + col + '"></span>'
+            + '<span class="min-w-0 flex-1"><span class="block text-xs font-semibold">' + this.esc(n.title) + '</span>'
+            + (n.body ? '<span class="mt-0.5 block text-[11px] leading-snug text-muted-foreground">' + this.esc(n.body) + '</span>' : '')
+            + '</span></span>';
+        t.onclick = () => { t.remove(); if (n.link) location.href = n.link; };
+        host.appendChild(t);
+        setTimeout(() => t.remove(), 6000);
+    }
+};
+const notifBtn = document.getElementById('notifBtn');
+const notifPanel = document.getElementById('notifPanel');
+if (notifBtn && notifPanel) {
+    notifBtn.onclick = (e) => { e.stopPropagation(); notifPanel.classList.toggle('hidden'); if (!notifPanel.classList.contains('hidden')) NOTIF_NS.refresh(false); };
+    document.addEventListener('click', (e) => { if (!notifPanel.classList.contains('hidden') && !notifPanel.contains(e.target) && e.target !== notifBtn) notifPanel.classList.add('hidden'); });
+}
+const notifReadAll = document.getElementById('notifReadAll');
+if (notifReadAll) notifReadAll.onclick = async (e) => { e.stopPropagation(); try { const j = await call('notif_read_all'); NOTIF_NS.badge(j.unread); NOTIF_NS.refresh(false); } catch (err) {} };
+NOTIF_NS.badge(<?= (int)$notifUnread ?>);
+NOTIF_NS.render(NOTIF0 || []);
+{ const top = (NOTIF0 || [])[0]; if (top) NOTIF_NS.maxSeen = top.id; }
+NOTIF_NS.refresh(false);                                   // recalcul immédiat du badge à l'ouverture
+setInterval(() => NOTIF_NS.refresh(true), 60000);
+
 async function pushPlanned(id) {
   try { await call('plan_push', {id}); location.reload(); } catch (e) { alert(e.message); }
 }
@@ -725,7 +1076,13 @@ async function deletePlanned(id) {
 }
 async function call(action, extra = {}) {
   const r = await fetch('sync.php', {method: 'POST', body: new URLSearchParams({action, ...extra})});
-  let j; try { j = await r.json(); } catch (e) { throw new Error('Réponse invalide du serveur (HTTP ' + r.status + ').'); }
+  let txt = '';
+  try { txt = await r.text(); } catch (e) {}
+  let j;
+  try { j = JSON.parse(txt); } catch (e) {
+    const frag = txt.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+    throw new Error('Réponse invalide du serveur (HTTP ' + r.status + ')' + (frag ? ' : ' + frag : ' — réponse vide'));
+  }
   if (j.login) { location.href = 'login.php'; throw new Error(j.error); }
   if (!j.ok) throw new Error(j.error);
   return j;
@@ -748,12 +1105,18 @@ async function runSync(days = 365, recompute = false) {
             try { await call('sync_wellness', {days: 90}); } catch(e){}
         }
         total = j.remaining || 1;
+        let stall = 0, last = total;
         while (j.remaining > 0) {
             msg.textContent = `Traitement des flux & analyse : ${total - j.remaining} / ${total}`;
             count.textContent = Math.round(((total - j.remaining) / total) * 100) + '%';
+            await new Promise(r => setTimeout(r, 350));
             j = await call('process');
+            stall = j.remaining < last ? 0 : stall + 1;
+            last = j.remaining;
+            if (stall >= 5) throw new Error('des séances résistent au traitement (rate-limit intervals.icu ou données manquantes) — réessaie plus tard ou resynchronise la séance concernée depuis son détail');
         }
-        msg.textContent = 'Synchronisation terminée avec succès !';
+        const tail = !recompute && j.created ? ` — ${j.created} nouvelle${j.created > 1 ? 's' : ''} séance${j.created > 1 ? 's' : ''}` : '';
+        msg.textContent = 'Synchronisation terminée avec succès !' + tail;
         setTimeout(() => location.reload(), 600);
     } catch (e) {
         msg.textContent = 'Erreur : ' + e.message;
@@ -799,7 +1162,7 @@ $count = (int)$pdo->query('SELECT COUNT(*) FROM activities')->fetchColumn();
    TABLEAU DE BORD (DASHBOARD)
    ======================================================== */
 if ($p === 'dashboard') {
-    head('Tableau de bord', 'dashboard');
+    head(t('Tableau de bord'), 'dashboard');
     if (!$count) { empty_state(); foot(); exit; }
 
     $sport = in_array($_GET['sport'] ?? '', ['ride', 'run'], true) ? $_GET['sport'] : null;
@@ -872,6 +1235,20 @@ if ($p === 'dashboard') {
       ?>
     </div>
 
+    <?php $form = form_narrative($sport); if ($form): ?>
+    <div class="card" id="formCard">
+      <section class="p-5">
+        <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          <span class="inline-block size-2 rounded-full" style="background:<?= ['#10b981', 'var(--primary)', '#f59e0b'][$form['level']] ?? 'var(--primary)' ?>"></span>
+          Ta forme du jour<?= $sport ? ' — ' . ($sport === 'ride' ? 'vélo' : 'course') : '' ?>
+        </div>
+        <p class="mt-1.5 text-base font-medium leading-snug"><?= h($form['main']) ?></p>
+        <p class="mt-2 rounded-lg bg-muted/50 px-3 py-2 text-xs leading-relaxed text-muted-foreground">💡 <?= h($form['simple']) ?></p>
+        <p class="mt-2 text-[11px] text-muted-foreground">Lecture automatique de tes indicateurs PMC (forme, fatigue, fraîcheur), de ta charge sur 7 jours et de ta récupération (HRV, sommeil) — indicatif, pas un diagnostic médical.</p>
+      </section>
+    </div>
+    <?php endif; ?>
+
     <?php $gs = progress_goal_status(); ?>
     <?php if ($gs['goals_set']): ?>
     <div class="card" id="goalsCard">
@@ -895,11 +1272,12 @@ if ($p === 'dashboard') {
           <h3 class="text-base font-semibold">PMC Coggan — TSS</h3>
           <p class="text-xs text-muted-foreground">Forme (CTL 42 j), fatigue (ATL 7 j), charge quotidienne, et fraîcheur (TSB) par zones de Coggan</p>
         </div>
-        <div class="flex items-center gap-1" id="pmcRange" role="group" aria-label="Période">
+        <div class="flex items-center gap-1 flex-wrap sm:flex-nowrap" id="pmcRange" role="group" aria-label="Période">
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="90">3 mois</button>
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="180">6 mois</button>
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="365">1 an</button>
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="0">Tout</button>
+          <button type="button" class="btn" data-size="sm" data-variant="outline" onclick="runSync(4000)" title="<?= h(t('Synchroniser tout l\'historique intervals.icu (long la première fois)')) ?>"><?= h(t('Historique complet')) ?></button>
         </div>
       </header>
       <section class="p-4">
@@ -1226,7 +1604,7 @@ if ($p === 'dashboard') {
    ACTIVITÉS (ACTIVITIES LIST)
    ======================================================== */
 if ($p === 'activities') {
-    head('Activités', 'activities');
+    head(t('Activités'), 'activities');
     if (!$count) { empty_state(); foot(); exit; }
 
     $sport = in_array($_GET['sport'] ?? '', ['ride', 'run', 'swim', 'other'], true) ? $_GET['sport'] : null;
@@ -1341,6 +1719,14 @@ if ($p === 'activities') {
 /* ========================================================
    DÉTAIL ACTIVITÉ & ANALYSE COMPLETE WKO5 / TRAININGPEAKS
    ======================================================== */
+/* ---------- Post : adopter une FTP estimée depuis une séance ---------- */
+if ($p === 'activity' && $_SERVER['REQUEST_METHOD'] === 'POST' && array_key_exists('ftp_adopt', $_POST)) {
+    $v = (int)($_POST['ftp_val'] ?? 0);
+    if ($v >= 50 && $v <= 1000) cfg_set('ftp', (string)$v);
+    header('Location: ?p=activity&id=' . urlencode(trim((string)($_POST['act_id'] ?? ''))) . '&ftpadopt=1');
+    exit;
+}
+
 if ($p === 'activity') {
     $st = $pdo->prepare('SELECT * FROM activities WHERE id=?');
     $st->execute([$_GET['id'] ?? '']);
@@ -1441,8 +1827,34 @@ if ($p === 'activity') {
         }
     }
     $workoutMmp = $a['mmp'] ? json_decode($a['mmp'], true) : [];
+
+    /* FTP estimée par les meilleurs efforts de la séance : 100 % du meilleur 60 min, sinon 95 % du meilleur 20 min (classique) */
+    $ftpEst = null; $ftpSrc = ''; $best20 = 0.0;
+    if ($a['sport'] === 'ride' && $rawWatts) {
+        $best20 = (float)($workoutMmp[1200] ?? 0);
+        if ($best20 <= 0) $best20 = pr_best_mean($rawWatts, 1200);
+        $best60 = (float)($workoutMmp[3600] ?? 0);
+        if ($best60 <= 0) $best60 = pr_best_mean($rawWatts, 3600);
+        if ($best60 > 0) { $ftpEst = round($best60); $ftpSrc = '60'; }
+        elseif ($best20 > 0) { $ftpEst = round($best20 * 0.95); $ftpSrc = '20'; }
+    }
+    $curFtp = (float)cfg('ftp', 0);
+    /* nouveau record 20 min ? — meilleur 20 min des 90 jours SANS cette séance */
+    $prevBest20 = 0.0;
+    if ($a['sport'] === 'ride' && $best20 > 0) {
+        $qpb = $pdo->prepare("SELECT mmp FROM activities WHERE sport='ride' AND mmp IS NOT NULL AND id <> ? AND date >= date('now','-90 days')");
+        $qpb->execute([$a['id']]);
+        foreach ($qpb as $r) foreach (json_decode($r['mmp'], true) ?: [] as $d => $v) if ((int)$d === 1200) $prevBest20 = max($prevBest20, (float)$v);
+    }
+    $newRec20 = $prevBest20 > 0 && $best20 > $prevBest20 + 0.5;
+    /* carte affichée seulement si l'estimation est crédible (≥ 95 % de la FTP actuelle, ou pas de FTP définie) */
+    $ftpUseful = $ftpEst !== null && ($curFtp <= 0 || $ftpEst >= $curFtp * 0.95);
+    $ftpSuggest = $ftpEst !== null && ($curFtp <= 0 || $ftpEst >= ceil($curFtp * 1.02));
     ?>
     <div class="space-y-6">
+      <?php if (isset($_GET['ftpadopt'])): ?>
+        <div class="alert"><h2><?= t('FTP mise à jour') ?> : <?= n((float)cfg('ftp', 0), 0) ?> W</h2><p class="text-xs text-muted-foreground"><?= t('Tes zones, TSS et diagnostics utilisent désormais cette valeur.') ?></p></div>
+      <?php endif; ?>
       <div class="flex items-center justify-between">
         <a class="text-xs text-muted-foreground hover:underline flex items-center gap-1" href="?p=activities">
           ← Retour aux activités
@@ -1865,6 +2277,12 @@ if ($p === 'activity') {
               <span class="inline-block size-2 rounded-full" style="background:<?= $dgColor ?>"></span> Diagnostic automatique
             </div>
             <p class="mt-1.5 text-base font-medium leading-snug"><?= h($diag['main']['text']) ?></p>
+            <?php if (!empty($diag['narrative'])): ?>
+              <p class="mt-2 border-l-2 pl-3 text-sm leading-relaxed text-muted-foreground" style="border-color:<?= $dgColor ?>"><?= h($diag['narrative']) ?></p>
+            <?php endif; ?>
+            <?php if (!empty($diag['simple'])): ?>
+              <p class="mt-2 rounded-lg bg-muted/50 px-3 py-2 text-xs leading-relaxed text-muted-foreground">💡 <?= h($diag['simple']) ?></p>
+            <?php endif; ?>
             <?php if (!empty($diag['extra'])): ?>
               <details class="mt-3 group">
                 <summary class="cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground"><?= count($diag['extra']) ?> autre<?= count($diag['extra']) > 1 ? 's' : '' ?> observation<?= count($diag['extra']) > 1 ? 's' : '' ?></summary>
@@ -1876,6 +2294,19 @@ if ($p === 'activity') {
                 <p class="mt-3 text-[11px] text-muted-foreground">Analyse automatique indicative, calculée à partir de vos seuils (FTP, LTHR) et des données de la sortie.</p>
               </details>
             <?php endif; ?>
+          </section>
+        </div>
+      <?php endif; ?>
+
+      <!-- Commentaires de tes coaches -->
+      <?php $myCmts = coach_comments_current((string)$a['id']); ?>
+      <?php if ($myCmts): ?>
+        <div class="card">
+          <section class="p-4 space-y-2">
+            <h3 class="text-sm font-semibold">💬 <?= t('Ton coach') ?></h3>
+            <?php foreach ($myCmts as $mc): ?>
+              <p class="border-l-2 border-primary/40 pl-3 text-sm leading-relaxed"><b><?= h($mc['coach_name']) ?></b> · <span class="text-xs text-muted-foreground"><?= date('d/m/Y H:i', (int)$mc['ts']) ?></span><br><?= h($mc['body']) ?></p>
+            <?php endforeach; ?>
           </section>
         </div>
       <?php endif; ?>
@@ -1899,13 +2330,19 @@ if ($p === 'activity') {
           <section class="space-y-4 p-4">
             <?php if ($pc['summary']): ?><p class="text-sm font-medium"><?= h($pc['summary']) ?></p><?php endif; ?>
             <?php if ($pc['note']): ?><p class="text-xs text-muted-foreground"><?= h($pc['note']) ?></p><?php endif; ?>
+            <?php $qDur = $pc['dur']['planned'] > 0 ? $pc['dur']['actual'] / $pc['dur']['planned'] : null;
+                  $qTss = $pc['tss']['planned'] > 0 ? $pc['tss']['actual'] / $pc['tss']['planned'] : null;
+                  $dSub = function ($q, float $lo, float $hi): string {
+                      if ($q === null || ($q >= $lo && $q <= $hi)) return '';
+                      return ' (' . ($q > 1 ? '+' : '−') . round(abs($q - 1) * 100) . '% ' . t('du plan') . ')';
+                  }; ?>
             <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <?php foreach ([['Respect des cibles', $pc['parts']['structure'], $pc['parts']['structure'] === null ? 'non évalué' : 'étape par étape'],
-                              ['Durée', $pc['parts']['duration'], fmt_dur((int)$pc['dur']['planned']) . ' → ' . fmt_dur((int)$pc['dur']['actual'])],
-                              ['Charge (TSS)', $pc['parts']['load'], round($pc['tss']['planned']) . ' → ' . round($pc['tss']['actual'])]] as [$lbl, $val, $sub]): ?>
+                              ['Durée', $pc['parts']['duration'], fmt_dur((int)$pc['dur']['planned']) . ' → ' . fmt_dur((int)$pc['dur']['actual']) . $dSub($qDur, 0.95, 1.10)],
+                              ['Charge (TSS)', $pc['parts']['load'], round($pc['tss']['planned']) . ' → ' . round($pc['tss']['actual']) . $dSub($qTss, 0.9, 1.1)]] as [$lbl, $val, $sub]): ?>
                 <div class="rounded-lg border p-3">
                   <p class="text-[10px] uppercase tracking-wide text-muted-foreground"><?= $lbl ?></p>
-                  <p class="text-xl font-semibold tabular-nums"><?= $pctOf($val) ?></p>
+                  <p class="text-xl font-semibold tabular-nums" style="color:<?= $barCol($val) ?>"><?= $pctOf($val) ?></p>
                   <div class="my-1 h-1.5 overflow-hidden rounded-full bg-muted"><div class="h-full rounded-full" style="width:<?= (int)($val ?? 0) ?>%;background:<?= $barCol($val) ?>"></div></div>
                   <p class="text-[11px] text-muted-foreground tabular-nums"><?= h($sub) ?></p>
                 </div>
@@ -1913,7 +2350,9 @@ if ($p === 'activity') {
               <div class="rounded-lg border p-3">
                 <p class="text-[10px] uppercase tracking-wide text-muted-foreground">Départ</p>
                 <p class="text-xl font-semibold tabular-nums"><?= $pc['chart'] ? ($pc['offset'] >= 0 ? '+' : '−') . fmt_dur(abs((int)$pc['offset'])) : '–' ?></p>
-                <p class="mt-1 text-[11px] text-muted-foreground"><?= $pc['mode'] === 'hr' ? 'décalage détecté (latence FC incluse)' : 'décalage détecté avec le plan' ?></p>
+                <p class="mt-1 text-[11px] text-muted-foreground"><?= $pc['offset'] === 0
+                  ? ($pc['mode'] === 'hr' ? 'départ aligné (latence FC incluse)' : 'départ aligné sur le plan')
+                  : ($pc['mode'] === 'hr' ? 'décalage détecté (latence FC incluse)' : 'décalage détecté avec le plan') ?></p>
               </div>
             </div>
             <?php if ($pc['chart']): ?>
@@ -2011,7 +2450,7 @@ if ($p === 'activity') {
       <div id="sec-telemetrie" class="space-y-6 scroll-mt-24">
 
       <!-- Graphique Multi-Flux Télémétrique Moderne avec sélecteur de flux & Switcher Empilé / Unique -->
-      <div class="card">
+      <div class="card" id="telemetryCard">
         <header class="p-4 border-b flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div>
             <h3 class="text-base font-semibold">Télémétrie 1 Hz & Profil de l'effort</h3>
@@ -2070,8 +2509,12 @@ if ($p === 'activity') {
 
         <section class="p-4">
           <div class="flex items-center justify-between gap-2 mb-2 text-[11px] text-muted-foreground">
-            <span>Molette : zoom · Double-clic : dézoomer · Glisser : sélection d'un tour</span>
-            <button type="button" id="zoomReset" class="hidden shrink-0 px-2 py-0.5 rounded-md border hover:bg-muted" onclick="zoomReset()">Réinitialiser le zoom</button>
+            <span>Molette : zoom · Double-clic : dézoomer · Souris : glisser = sélection d'un tour · Tactile : glisser = lecture continue de l'info</span>
+            <div class="flex items-center gap-1 shrink-0">
+              <button type="button" id="selModeBtn" class="hidden px-2 py-0.5 rounded-md border hover:bg-muted" onclick="toggleSelMode()" title="Activer la sélection de tour au doigt">✂ Sélection au doigt</button>
+              <button type="button" id="zoomReset" class="hidden px-2 py-0.5 rounded-md border hover:bg-muted" onclick="zoomReset()">Réinitialiser le zoom</button>
+              <button type="button" class="px-2 py-0.5 rounded-md border hover:bg-muted" onclick="trqFsToggle('telemetryCard')" title="Graphique en pleine page (horizontal sur téléphone)">⛶ Plein écran</button>
+            </div>
           </div>
 
           <!-- 1. Conteneur Graphique Unique (Superposé) -->
@@ -2435,7 +2878,7 @@ if ($p === 'activity') {
       ?>
       <div class="grid lg:grid-cols-2 gap-6" id="pfcAnalyticsSection">
         <!-- 1. Puissance / FC dans le temps -->
-        <div class="card">
+        <div class="card" id="pfcCard">
           <header class="p-4 border-b">
             <h3 class="text-base font-semibold">Puissance/FC</h3>
             <div class="mt-1.5 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -2456,12 +2899,13 @@ if ($p === 'activity') {
             <?php endif; ?>
           </header>
           <section class="p-4">
+            <div class="flex justify-end"><button type="button" class="px-2 py-0.5 mb-1 rounded-md border text-[11px] hover:bg-muted" onclick="trqFsToggle('pfcCard')" title="Graphique en pleine page">⛶ Plein écran</button></div>
             <div class="h-64"><canvas id="chartPowerHrTime"></canvas></div>
           </section>
         </div>
 
         <!-- 2. Dérive puissance-FC (Premier vs Deuxième Moitié) -->
-        <div class="card">
+        <div class="card" id="driftCard">
           <header class="p-4 border-b text-center">
             <h3 class="text-base font-semibold text-left">Dérive puissance-FC</h3>
             <p class="mt-1 text-xs font-semibold">
@@ -2471,6 +2915,7 @@ if ($p === 'activity') {
             </p>
           </header>
           <section class="p-4">
+            <div class="flex justify-end"><button type="button" class="px-2 py-0.5 mb-1 rounded-md border text-[11px] hover:bg-muted" onclick="trqFsToggle('driftCard')" title="Graphique en pleine page">⛶ Plein écran</button></div>
             <div class="h-64"><canvas id="chartPowerHrDrift"></canvas></div>
           </section>
         </div>
@@ -2642,20 +3087,50 @@ if ($p === 'activity') {
 
       <div id="sec-distributions" class="space-y-6 scroll-mt-24">
 
+      <!-- FTP estimée par la séance -->
+      <?php if ($ftpUseful): ?>
+      <div class="card">
+        <section class="p-4 flex flex-wrap items-center justify-between gap-3">
+          <div class="min-w-0">
+            <h3 class="text-base font-semibold">🎯 <?= t('FTP estimée') ?> : <span class="text-primary"><?= n($ftpEst) ?> W</span>
+              <?php if ($newRec20): ?><span class="badge bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 ml-1"><?= t('Nouveau record 20 min') ?></span><?php endif; ?>
+            </h3>
+            <p class="text-xs text-muted-foreground">
+              <?= $ftpSrc === '60' ? t('meilleure puissance 60 min') . ' : ' . n(round((float)($workoutMmp[3600] ?? pr_best_mean($rawWatts, 3600)))) . ' W' : t('meilleure puissance 20 min') . ' : ' . n(round((float)($workoutMmp[1200] ?? $best20))) . ' W × 95 %' ?>
+              · <?= t('FTP actuelle') ?> : <?= $curFtp > 0 ? n($curFtp, 0) . ' W' : t('non configurée') ?>
+            </p>
+          </div>
+          <div class="flex items-center gap-2">
+            <?php if ($ftpSuggest): ?>
+              <form method="post" action="?p=activity">
+                <input type="hidden" name="ftp_adopt" value="1">
+                <input type="hidden" name="ftp_val" value="<?= $ftpEst ?>">
+                <input type="hidden" name="act_id" value="<?= h((string)$a['id']) ?>">
+                <button class="btn" data-size="sm" type="submit"><?= t('Adopter cette FTP') ?></button>
+              </form>
+            <?php elseif ($curFtp > 0): ?>
+              <span class="badge bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">✓ <?= t('cohérente avec ta FTP actuelle') ?></span>
+            <?php endif; ?>
+          </div>
+        </section>
+      </div>
+      <?php endif; ?>
+
       <!-- Graphique PDC de la séance vs Meilleure PDC 90j de la saison -->
       <div class="grid lg:grid-cols-2 gap-6">
-        <div class="card">
+        <div class="card" id="mmpCard">
           <header class="p-4 border-b">
             <h3 class="text-base font-semibold">MMP de la séance vs Record 90 jours</h3>
             <p class="text-xs text-muted-foreground">Comparaison de vos meilleurs efforts de la séance face à votre enveloppe de saison</p>
           </header>
           <section class="p-4">
+            <div class="flex justify-end"><button type="button" class="px-2 py-0.5 mb-1 rounded-md border text-[11px] hover:bg-muted" onclick="trqFsToggle('mmpCard')" title="Graphique en pleine page">⛶ Plein écran</button></div>
             <div class="h-64"><canvas id="mmpCompare"></canvas></div>
           </section>
         </div>
 
         <!-- Zones de puissance & Polarisation -->
-        <div class="card">
+        <div class="card" id="zonesCard">
           <header class="p-4 border-b flex items-center justify-between">
             <div>
               <h3 class="text-base font-semibold">Distribution temporelle des zones (Coggan)</h3>
@@ -2668,6 +3143,7 @@ if ($p === 'activity') {
             <?php endif; ?>
           </header>
           <section class="p-4">
+            <div class="flex justify-end"><button type="button" class="px-2 py-0.5 mb-1 rounded-md border text-[11px] hover:bg-muted" onclick="trqFsToggle('zonesCard')" title="Graphique en pleine page">⛶ Plein écran</button></div>
             <div class="h-64"><canvas id="zonesChart"></canvas></div>
           </section>
         </div>
@@ -2801,6 +3277,48 @@ if ($p === 'activity') {
 
     const baseSeries = [powerData, hrData, spdData, altData, cadData].find(s => s.length) || [];
     const labels = baseSeries.map((_, i) => (i * step / 60).toFixed(0) + ' min');
+
+    /* ---------- Bandes de zone (traits colorés sous les courbes) ----------
+       Affichées uniquement si les seuils existent dans Paramètres :
+       Puissance -> 7 zones Coggan en % de FTP (même couleur que zoneColor),
+       FC -> 5 zones en % de LTHR (0.81 / 0.89 / 0.93 / 0.99 — identique à hr_zones()). */
+    const ZCOLS = ['#94a3b8', '#0ea5e9', '#10b981', '#f59e0b', '#f97316', '#f43f5e', '#a855f7'];
+    const ZHRCOLS = ['#94a3b8', '#0ea5e9', '#10b981', '#f59e0b', '#f43f5e'];
+    const lthrValue = <?= (float)cfg('lthr', 172) ?>;
+    const zoneOfW = w => { if (!(w > 0) || !(ftpValue > 0)) return 0; const r = w / ftpValue; return r > 1.5 ? 7 : r > 1.2 ? 6 : r > 1.05 ? 5 : r > 0.9 ? 4 : r > 0.75 ? 3 : r > 0.55 ? 2 : 1; };
+    const zoneOfHr = h => { if (!(h > 0) || !(lthrValue > 0)) return 0; const r = h / lthrValue; return r > 0.99 ? 5 : r > 0.93 ? 4 : r > 0.89 ? 3 : r > 0.81 ? 2 : 1; };
+    const zoneBandPlugin = {
+        id: 'zoneBands',
+        afterDatasetsDraw(chart) {
+            const zc = chart.options.plugins && chart.options.plugins.zoneBands;
+            if (!zc || !zc.bands || !zc.bands.length) return;
+            const {ctx, chartArea, scales} = chart;
+            if (!chartArea || !scales || !scales.x) return;
+            const xs = scales.x, px = v => xs.getPixelForValue(v);
+            const bH = 5, gap = 2, bands = zc.bands;
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(chartArea.left - 1, chartArea.top - 1, chartArea.width + 2, chartArea.height + 2);
+            ctx.clip();
+            bands.forEach((b, bi) => {
+                const n = b.vals.length; if (!n) return;
+                const ty = chartArea.bottom - (bands.length - bi) * (bH + gap);
+                for (let i = 0; i < n; i++) {
+                    const z = b.vals[i]; if (!z) continue;
+                    const xc = px(i);
+                    let w = 4;
+                    if (n > 1) w = Math.abs((i + 1 < n ? px(i + 1) : xc - (xc - px(i - 1))) - xc);
+                    if (!w) continue;
+                    ctx.fillStyle = b.cols[z - 1];
+                    ctx.fillRect(xc - w / 2, ty, w, bH);
+                }
+            });
+            ctx.restore();
+        }
+    };
+    const zoneBandsPower = (powerData.length && ftpValue > 0) ? [{cols: ZCOLS, vals: powerData.map(zoneOfW)}] : [];
+    const zoneBandsHr = (hrData.length && lthrValue > 0) ? [{cols: ZHRCOLS, vals: hrData.map(zoneOfHr)}] : [];
+    const zoneBandsTelemetry = [...zoneBandsPower, ...zoneBandsHr];
 
     const datasets = [
         { label: 'Puissance (W)', data: powerData, borderColor: '#06b6d4', borderWidth: 1.2, pointRadius: 0, yAxisID: 'y' },
@@ -2942,6 +3460,72 @@ if ($p === 'activity') {
             stats.innerHTML = out.join('');
         } catch (e) { stats.innerHTML = ''; msg.textContent = e.message; }
     }
+    /* ---------- Tactile : affichage continu de l'info sous le doigt ---------- */
+    function showTip(chart, ev) {
+        try {
+            const els = chart.getElementsAtEventForMode(ev, 'index', { intersect: false }, false);
+            if (!els.length) return;
+            chart.tooltip.setActiveElements(els.map(e => ({datasetIndex: e.datasetIndex, index: e.index})), {x: ev.clientX, y: ev.clientY});
+            chart.draw();
+        } catch (e) {}
+    }
+    let SEL_TOUCH = false;
+    function toggleSelMode() {
+        SEL_TOUCH = !SEL_TOUCH;
+        const b = document.getElementById('selModeBtn');
+        if (b) { b.classList.toggle('bg-primary/15', SEL_TOUCH); b.classList.toggle('font-semibold', SEL_TOUCH); }
+    }
+    if (window.matchMedia && matchMedia('(pointer:coarse)').matches) {
+        const sb = document.getElementById('selModeBtn'); if (sb) sb.classList.remove('hidden');
+    }
+
+    /* ---------- Plein écran des graphes : overlay fixe (PC = plein écran natif) ; sur téléphone en portrait, l'overlay pivote (lecture en horizontal) ---------- */
+    let trqFsState = null;
+    function trqFsFit() {
+        if (!trqFsState) return;
+        const {card, rot} = trqFsState;
+        const hh = rot.clientHeight || window.innerHeight;
+        const cvs = Array.from(card.querySelectorAll('canvas')).filter(cv => cv.offsetParent !== null);
+        if (!cvs.length) return;
+        const per = cvs.length > 1 ? Math.max(150, Math.round((hh - 140) / cvs.length)) : Math.max(200, Math.round(hh - 150));
+        cvs.forEach(cv => { const p = cv.parentElement; if (!p) return; if (p.dataset.prevH === undefined) p.dataset.prevH = p.style.height || ''; p.style.height = per + 'px'; });
+        window.dispatchEvent(new Event('resize'));
+    }
+    function trqFsToggle(cardId) {
+        const card = document.getElementById(cardId);
+        if (!card) return;
+        if (trqFsState) { trqFsExit(); return; }
+        const parent = card.parentElement, next = card.nextSibling;
+        const rot = document.createElement('div');
+        rot.className = 'trq-fs-rot';
+        parent.insertBefore(rot, card);
+        rot.appendChild(card);
+        document.body.appendChild(rot);
+        document.body.classList.add('trq-no-scroll');
+        trqFsState = {card, parent, next, rot};
+        trqFsFit();
+        try { if (card.requestFullscreen) card.requestFullscreen().catch(() => {}); } catch (e) {}
+        try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {}); } catch (e) {}
+        trqFsState.on = () => trqFsFit();
+        window.addEventListener('resize', trqFsState.on);
+        window.addEventListener('orientationchange', trqFsState.on);
+    }
+    function trqFsExit() {
+        if (!trqFsState) return;
+        const {card, parent, next, rot} = trqFsState;
+        window.removeEventListener('resize', trqFsState.on);
+        window.removeEventListener('orientationchange', trqFsState.on);
+        card.querySelectorAll('canvas').forEach(cv => { const p = cv.parentElement; if (p && p.dataset.prevH !== undefined) { p.style.height = p.dataset.prevH; delete p.dataset.prevH; } });
+        parent.insertBefore(card, next);
+        rot.remove();
+        document.body.classList.remove('trq-no-scroll');
+        try { if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {}); } catch (e) {}
+        try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (e) {}
+        window.dispatchEvent(new Event('resize'));
+        trqFsState = null;
+    }
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && trqFsState) trqFsExit(); });
+
     function attachSelection(chart) {
         chart.$sel = true; selCharts.push(chart);
         chart.$link = true; linkedCharts.push(chart);
@@ -2949,8 +3533,12 @@ if ($p === 'activity') {
         const cv = chart.canvas; cv.style.touchAction = 'pan-y'; cv.style.cursor = 'crosshair';
         let drag = null;
         const idx = ev => { const r = cv.getBoundingClientRect(); const v = chart.scales.x.getValueForPixel(ev.clientX - r.left); return Math.max(0, Math.min(labels.length - 1, Math.round(v))); };
-        cv.addEventListener('pointerdown', ev => { if (ev.button !== 0) return; drag = idx(ev); SEL = {a: drag * step, b: drag * step}; cv.setPointerCapture(ev.pointerId); });
-        cv.addEventListener('pointermove', ev => { if (drag === null) return; const b = idx(ev); SEL = {a: Math.min(drag, b) * step, b: Math.max(drag, b) * step}; selRedraw(); });
+        cv.addEventListener('pointerdown', ev => { if (ev.button !== 0 || (ev.pointerType !== 'mouse' && !SEL_TOUCH)) return; drag = idx(ev); SEL = {a: drag * step, b: drag * step}; cv.setPointerCapture(ev.pointerId); });
+        cv.addEventListener('pointermove', ev => {
+            if (drag === null) { if (ev.pointerType !== 'mouse') showTip(chart, ev); return; }
+            const b = idx(ev); SEL = {a: Math.min(drag, b) * step, b: Math.max(drag, b) * step}; selRedraw();
+            if (ev.pointerType !== 'mouse') showTip(chart, ev);          // tactile : info continue pendant la sélection aussi
+        });
         const end = () => {
             if (drag === null) return; drag = null;
             if (!SEL || SEL.b - SEL.a < 5) { selClear(); return; }       // simple clic = désélection
@@ -2978,11 +3566,13 @@ if ($p === 'activity') {
 
     const chartInstance = new Chart('fullTelemetry', {
         type: 'line',
+        plugins: [zoneBandPlugin],
         data: { labels: labels, datasets: datasets },
         options: {
             maintainAspectRatio: false,
             animation: false,
             interaction: { mode: 'index', intersect: false },
+            plugins: { zoneBands: { bands: zoneBandsTelemetry } },
             scales: {
                 x: { ticks: { maxTicksLimit: 12 } },
                 y: { title: { display: true, text: 'Watts' }, position: 'left' },
@@ -3065,9 +3655,11 @@ if ($p === 'activity') {
             }
             stackedCharts.push(new Chart(elPwr, {
                 type: 'line',
+                plugins: [zoneBandPlugin],
                 data: { labels: labels, datasets: pwrDatasets },
                 options: {
                     ...commonOptions,
+                    plugins: { ...(commonOptions.plugins || {}), zoneBands: { bands: zoneBandsPower } },
                     scales: {
                         x: { display: false },
                         y: { title: { display: true, text: 'Watts' }, min: 0 }
@@ -3104,9 +3696,11 @@ if ($p === 'activity') {
             }
             stackedCharts.push(new Chart(elHr, {
                 type: 'line',
+                plugins: [zoneBandPlugin],
                 data: { labels: labels, datasets: hrDatasets },
                 options: {
                     ...commonOptions,
+                    plugins: { ...(commonOptions.plugins || {}), zoneBands: { bands: zoneBandsHr } },
                     scales: {
                         x: { display: false },
                         y: { title: { display: true, text: 'bpm' }, min: 60 }
@@ -3646,7 +4240,7 @@ const IS_RUN_PAGE = <?= $isRun ? 'true' : 'false' ?>;
    COURBES DE PUISSANCE WKO5 MULTI-SAISONS (PDC)
    ======================================================== */
 if ($p === 'power') {
-    head('Courbes de puissance', 'power');
+    head(t('Courbes de puissance'), 'power');
     $sport = ($_GET['sport'] ?? 'ride') === 'run' ? 'run' : 'ride';
     $isRun = $sport === 'run';
 
@@ -3855,7 +4449,7 @@ if ($p === 'power') {
    WELLNESS & SANTÉ (HRV, FC REPOS, SOMMEIL)
    ======================================================== */
 if ($p === 'wellness') {
-    head('Wellness & Récupération', 'wellness');
+    head(t('Wellness & Récupération'), 'wellness');
     $summary = get_wellness_summary(60);
     $history = $summary['history'] ?? [];
     $todayRow = end($history) ?: null;
@@ -4083,7 +4677,7 @@ if ($p === 'wellness') {
    CALENDRIER D'ENTRAÎNEMENT STYLE TRAININGPEAKS
    ======================================================== */
 if ($p === 'calendar') {
-    head('Calendrier d’entraînement', 'calendar');
+    head(t('Calendrier d’entraînement'), 'calendar');
 
     $today = date('Y-m-d');
     $mParam = $_GET['m'] ?? date('Y-m');
@@ -4097,13 +4691,16 @@ if ($p === 'calendar') {
     $monthEnd = (clone $firstDayOfMonth)->modify('last day of this month');
     if ((int)$monthEnd->format('N') < 7) $monthEnd->modify('+' . (7 - (int)$monthEnd->format('N')) . ' days');
 
-    $weekStart = (new DateTime('today'))->modify('monday this week');
+    /* vue semaine (mobile) : le paramètre ?d= des boutons ←/→ est désormais lu (avant : toujours la semaine d'aujourd'hui) */
+    $dParam = (string)($_GET['d'] ?? '');
+    $weekBase = preg_match('/^\d{4}-\d{2}-\d{2}$/', $dParam) ? new DateTime($dParam) : new DateTime('today');
+    $weekStart = (clone $weekBase)->modify('monday this week');
     $weekEnd = (clone $weekStart)->modify('+6 days');
     $prevW = (clone $weekStart)->modify('-7 days')->format('Y-m-d');
     $nextW = (clone $weekStart)->modify('+7 days')->format('Y-m-d');
 
-    $calMoisFr = [1 => 'janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
-    $calJoursFr = [1 => 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
+    $calMoisFr = [1 => t('janvier'), t('février'), t('mars'), t('avril'), t('mai'), t('juin'), t('juillet'), t('août'), t('septembre'), t('octobre'), t('novembre'), t('décembre')];
+    $calJoursFr = [1 => t('Lundi'), t('Mardi'), t('Mercredi'), t('Jeudi'), t('Vendredi'), t('Samedi'), t('Dimanche')];
 
     $loadRange = function (string $from, string $to) use ($pdo): array {
         $byDay = [];
@@ -4120,6 +4717,27 @@ if ($p === 'calendar') {
     };
     $byDayM = $loadRange($monthStart->format('Y-m-d'), $monthEnd->format('Y-m-d'));
     $byDayW = $loadRange($weekStart->format('Y-m-d'), $weekEnd->format('Y-m-d'));
+
+    /* Notes du calendrier : on charge tout ce qui chevauche min/max (mois, semaine) puis on expande jour par jour */
+    $noteByDay = [];
+    try {
+        $nLo = min($weekStart->format('Y-m-d'), $monthStart->format('Y-m-d'));
+        $nHi = max($weekEnd->format('Y-m-d'), $monthEnd->format('Y-m-d'));
+        $st = $pdo->prepare('SELECT * FROM calendar_notes WHERE end_date >= ? AND start_date <= ? ORDER BY created_at ASC LIMIT 200');
+        $st->execute([$nLo, $nHi]);
+        $nGuard = 0;
+        foreach ($st->fetchAll() as $nr) {
+            $nr['sm'] = substr((string)$nr['start_date'], 0, 7);
+            $nS = max((string)$nr['start_date'], $nLo);
+            $nE = min((string)$nr['end_date'], $nHi);
+            for ($nd = $nS; $nd <= $nE; $nd = date('Y-m-d', strtotime($nd . ' +1 day'))) {
+                if ($nGuard++ > 400) break 2;
+                $noteByDay[$nd][] = $nr;
+            }
+        }
+    } catch (Throwable $e) {
+        $noteByDay = [];
+    }
 
     $cmpByPlan = []; $cmpByAct = []; $manualRows = []; $reserved = plan_reserved_ids();
     foreach ($pdo->query("SELECT activity_id FROM planned_workouts WHERE activity_id IS NOT NULL AND activity_id <> ''")->fetchAll(PDO::FETCH_COLUMN) as $mid) {
@@ -4210,6 +4828,23 @@ if ($p === 'calendar') {
             . '</div>';
     };
 
+    $renderNote = function (array $nr) use ($NOTE_TYPES): string {
+        $nt = $NOTE_TYPES[$nr['type']] ?? $NOTE_TYPES['custom'];
+        $isCustom = $nr['type'] === 'custom' && $nr['label'] !== '' && $nr['label'] !== null;
+        $lbl = $isCustom ? $nr['label'] : t($nt[1]);
+        $notes = trim((string)($nr['notes'] ?? ''));
+        $title = htmlspecialchars($isCustom ? $nr['label'] : $nt[1], ENT_QUOTES | ENT_HTML5);
+        if ($notes !== '') $title .= ' — ' . htmlspecialchars($notes, ENT_QUOTES | ENT_HTML5);
+        $confirm = addslashes(t('Supprimer cette note ?'));
+        return '<form method="post" action="?p=calendar" class="inline-flex">'
+            . '<input type="hidden" name="note_del" value="1">'
+            . '<input type="hidden" name="note_id" value="' . (int)$nr['id'] . '">'
+            . '<input type="hidden" name="note_m" value="' . htmlspecialchars((string)$nr['sm'], ENT_QUOTES | ENT_HTML5) . '">'
+            . '<button type="submit" class="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium max-w-full overflow-hidden text-ellipsis whitespace-nowrap ' . $nt[2] . ' transition hover:opacity-80" title="' . $title . '" onclick="return confirm(\'' . $confirm . '\')">'
+            . '<span aria-hidden="true">' . $nt[0] . '</span><span class="truncate">' . htmlspecialchars((string)$lbl, ENT_QUOTES | ENT_HTML5) . '</span>'
+            . '</button></form>';
+    };
+
     $dayTssOf = function (array $dayData): float {
         $t = 0.0;
         foreach ($dayData['acts'] ?? [] as $ac) $t += (float)($ac['tss'] ?? 0);
@@ -4235,8 +4870,19 @@ if ($p === 'calendar') {
             <span class="text-xs font-semibold text-muted-foreground">· sem. <?= h($weekStart->format('W')) ?></span>
           </div>
         </div>
-        <button class="btn" data-size="sm" onclick="openWorkoutModal()">＋ Planifier</button>
+        <div class="flex items-center gap-2">
+          <button class="btn" data-size="sm" onclick="openNoteModal()">📝 Note</button>
+          <button class="btn" data-size="sm" onclick="openWorkoutModal()">＋ Planifier</button>
+        </div>
       </div>
+
+      <?php if (isset($_GET['note'])): ?>
+        <?php if ($_GET['note'] === '1'): ?>
+          <div class="alert"><h3><?= t('Note ajoutée au calendrier.') ?></h3></div>
+        <?php else: ?>
+          <div class="alert" data-variant="destructive"><h3><?= t('La note n’a pas pu être enregistrée.') ?></h3><p class="text-xs text-muted-foreground"><?= t('Un type personnalisé doit avoir un libellé.') ?></p></div>
+        <?php endif; ?>
+      <?php endif; ?>
 
       <?php /* ===================== VUE SEMAINE (mobile) ===================== */ ?>
       <div class="md:hidden space-y-3">
@@ -4262,6 +4908,7 @@ if ($p === 'calendar') {
             </header>
             <section class="p-3 space-y-2">
               <?php if (!empty($dayData['well'])) echo $renderWell($dayData['well']); ?>
+              <?php foreach ($noteByDay[$cDate] ?? [] as $nt) echo $renderNote($nt); ?>
               <?php if (empty($dayData['acts']) && empty($dayData['planned'])): ?>
                 <p class="py-3 text-center text-sm text-muted-foreground">Aucune séance</p>
               <?php endif; ?>
@@ -4335,6 +4982,7 @@ if ($p === 'calendar') {
                 <?php if (!empty($dayData['well'])) echo $renderWell($dayData['well']); ?>
 
                 <div class="flex-1 space-y-2 overflow-y-auto max-h-[320px]">
+                  <?php foreach ($noteByDay[$wd['date']] ?? [] as $nt) echo $renderNote($nt); ?>
                   <?php foreach ($dayData['planned'] ?? [] as $pl) echo $renderPlan($pl, false); ?>
                   <?php foreach ($dayData['acts'] ?? [] as $ac) echo $renderChip($ac, false); ?>
                 </div>
@@ -4372,7 +5020,7 @@ if ($p === 'calendar') {
    ======================================================== */
 /* ================= ENTRAÎNEMENTS (Workout Builder) ================= */
 if ($p === 'workouts') {
-    head('Entraînements', 'workouts');
+    head(t('Entraînements'), 'workouts');
     $woId = (int)($_GET['id'] ?? 0); $planId = (int)($_GET['plan'] ?? 0);
     $woData = null; $planDate = null; $notice = '';
     if ($woId) {
@@ -4536,7 +5184,7 @@ if ($p === 'workouts') {
 
 /* ================= ADMINISTRATION (comptes) ================= */
 if ($p === 'admin') {
-    head('Administration', 'admin');
+    head(t('Administration'), 'admin');
     if (!auth_enabled() || !is_admin()) { echo '<div class="alert" data-variant="destructive"><h2>Accès réservé aux administrateurs.</h2></div>'; foot(); exit; }
     $users = auth_users_list(); $regMode = (string)trq_config('registration');
     ?>
@@ -4549,7 +5197,7 @@ if ($p === 'admin') {
       <?php foreach ($users as $u): $self = (int)$u['id'] === current_uid(); ?>
         <tr>
           <td><?= (int)$u['id'] ?></td><td class="font-medium"><?= h($u['name']) ?><?= $self ? ' <span class="badge" data-variant="secondary">vous</span>' : '' ?></td><td><?= h($u['email']) ?></td>
-          <td><span class="badge" data-variant="<?= $u['role'] === 'admin' ? 'default' : 'outline' ?>"><?= $u['role'] === 'admin' ? 'admin' : 'utilisateur' ?></span></td>
+          <td><span class="badge" data-variant="<?= $u['role'] === 'admin' ? 'default' : 'outline' ?>"><?= $u['role'] === 'admin' ? 'admin' : ($u['role'] === 'coach' ? 'coach' : 'utilisateur') ?></span></td>
           <td class="whitespace-nowrap text-xs"><?= h(substr((string)$u['created_at'], 0, 10)) ?></td>
           <td class="whitespace-nowrap text-xs"><?= $u['last_login'] ? h(substr((string)$u['last_login'], 0, 16)) : '–' ?></td>
           <td class="text-xs tabular-nums"><?= (int)$u['db_kb'] ?> Ko</td>
@@ -4569,8 +5217,551 @@ if ($p === 'admin') {
     <?php foot(); exit;
 }
 
+if ($p === 'coach') {
+    head(t('Mes athlètes'), 'coach');
+    if (!coach_enabled() || !coach_is_coach()) {
+        echo '<div class="alert" data-variant="destructive"><h2>' . t('Accès réservé aux coaches.') . '</h2><p class="text-xs text-muted-foreground">' . t('Active le rôle coach dans tes Paramètres, puis fais-toi confier des athlètes via leur code d’invitation.') . '</p></div>';
+        foot(); exit;
+    }
+    /* Rafraîchissement des snapshots : au plus 10 par chargement, les plus périmés d'abord
+       (limite les hits et le temps CPU — important sur mutualisé) ; ?refresh=1 force tout. */
+    $force = isset($_GET['refresh']);
+    $roster = coach_roster(current_uid());
+    $stale = array_values(array_filter($roster, fn($r) => $force || !(int)($r['computed_at'] ?? 0) || (int)$r['computed_at'] < time() - 900));
+    usort($stale, fn($a, $b) => ((int)($a['computed_at'] ?? 0)) <=> ((int)($b['computed_at'] ?? 0)));
+    foreach (array_slice($stale, 0, 10) as $r) { try { coach_snapshot_refresh((int)$r['athlete_id']); } catch (Throwable $e) {} }
+    if ($stale) $roster = coach_roster(current_uid());
+    $nAlert = count(array_filter($roster, fn($r) => (int)($r['alert_level'] ?? 0) > 0));
+    $ALERT = [
+        0 => [t('Sain'), 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'],
+        1 => [t('Vigilance'), 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'],
+        2 => [t('Surmenage'), 'bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/30'],
+        3 => [t('Inactif'), 'bg-slate-500/15 text-slate-600 dark:text-slate-400 border border-slate-500/30'],
+    ];
+    ?>
+    <div class="flex flex-wrap items-end justify-between gap-3">
+      <div class="space-y-1">
+        <h1 class="text-2xl font-bold tracking-tight"><?= t('Mes athlètes') ?></h1>
+        <p class="text-sm text-muted-foreground"><?= count($roster) ?> <?= t('athlète(s)') ?> · <?= $nAlert ?> <?= t('en vigilance ou plus') ?></p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <input class="input h-9 w-56 text-sm" type="search" id="rosterSearch" placeholder="<?= h(t('Rechercher un athlète…')) ?>">
+        <a class="btn" data-variant="outline" data-size="sm" href="?p=coach&refresh=1" title="<?= h(t('Recalcule les indicateurs depuis les bases des athlètes')) ?>"><?= t('Actualiser') ?></a>
+      </div>
+    </div>
+
+    <?php if (!$roster): ?>
+    <div class="alert">
+      <h3><?= t('Aucun athlète pour l’instant.') ?></h3>
+      <p class="text-xs text-muted-foreground"><?= t('Chaque athlète génère son code dans Paramètres → Module coach : entre-le dans l’encadré coach de cette même page pour recevoir une demande d’accès.') ?></p>
+    </div>
+    <?php endif; ?>
+
+    <p id="rosterEmpty" class="hidden text-sm text-muted-foreground py-6"><?= t('Aucun athlète ne correspond à ta recherche.') ?></p>
+
+    <div id="rosterGrid" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+    <?php foreach ($roster as $r): $al = (int)($r['alert_level'] ?? 0); $lab = $ALERT[$al][0]; $cls = $ALERT[$al][1];
+          $ini = mb_strtoupper(mb_substr(trim((string)$r['name']) ?: '?', 0, 1));
+          $tsb = $r['tsb'] === null ? null : (float)$r['tsb'];
+          $lastAct = $r['last_activity'] ? substr((string)$r['last_activity'], 0, 10) : null;
+          $lastSync = $r['last_sync'] ? substr((string)$r['last_sync'], 0, 10) : null; ?>
+      <a class="card p-4 space-y-3 block hover:border-primary/50 transition" data-roster-card="<?= h(($r['name'] ?? '') . ' ' . ($r['email'] ?? '')) ?>" href="?p=coach_athlete&id=<?= (int)$r['athlete_id'] ?>" title="<?= h(t('Voir la fiche complète')) ?>">
+        <div class="flex items-start gap-3">
+          <span class="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground"><?= h($ini) ?></span>
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-sm font-semibold"><?= h((string)$r['name']) ?></p>
+            <p class="truncate text-xs text-muted-foreground"><?= h((string)$r['email']) ?></p>
+          </div>
+          <span class="badge <?= $cls ?>"><?= $lab ?></span>
+        </div>
+        <div class="grid grid-cols-4 gap-2 text-center">
+          <div class="rounded-lg border py-1.5"><p class="text-[10px] uppercase tracking-wide text-muted-foreground">CTL</p><p class="text-sm font-semibold tabular-nums"><?= $r['ctl'] !== null ? round((float)$r['ctl']) : '–' ?></p></div>
+          <div class="rounded-lg border py-1.5"><p class="text-[10px] uppercase tracking-wide text-muted-foreground">ATL</p><p class="text-sm font-semibold tabular-nums"><?= $r['atl'] !== null ? round((float)$r['atl']) : '–' ?></p></div>
+          <div class="rounded-lg border py-1.5"><p class="text-[10px] uppercase tracking-wide text-muted-foreground">TSB</p><p class="text-sm font-semibold tabular-nums <?= $tsb === null ? '' : ($tsb > 5 ? 'text-emerald-600 dark:text-emerald-400' : ($tsb < -10 ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400')) ?>"><?= $tsb === null ? '–' : ($tsb > 0 ? '+' : '') . round($tsb) ?></p></div>
+          <div class="rounded-lg border py-1.5"><p class="text-[10px] uppercase tracking-wide text-muted-foreground"><?= t('Charge 7 j') ?></p><p class="text-sm font-semibold tabular-nums"><?= ($r['tss_7j'] !== null && (int)$r['tss_7j'] > 0) ? (int)$r['tss_7j'] : '–' ?></p></div>
+        </div>
+        <div class="flex flex-wrap justify-between gap-x-4 gap-y-0.5 text-[11px] text-muted-foreground">
+          <span><?= t('Dernière séance') ?> : <b class="font-medium text-foreground/80"><?= $lastAct ?: '–' ?></b></span>
+          <?php if ($lastSync): ?><span><?= t('Dernier sync') ?> : <?= $lastSync ?></span><?php endif; ?>
+        </div>
+      </a>
+    <?php endforeach; ?>
+    </div>
+
+    <div class="flex justify-center py-2">
+      <button type="button" class="btn" data-variant="outline" data-size="sm" id="rosterMore"><?= t('Afficher plus') ?></button>
+    </div>
+
+    <script>
+    (function () {
+      const PER = 24;
+      let shown = PER;
+      const cards = Array.from(document.querySelectorAll('[data-roster-card]'));
+      const search = document.getElementById('rosterSearch');
+      const more = document.getElementById('rosterMore');
+      const empty = document.getElementById('rosterEmpty');
+      function apply() {
+        const s = (search && search.value || '').trim().toLowerCase();
+        let vis = 0;
+        cards.forEach(c => {
+          const ok = !s || (c.dataset.rosterCard || '').includes(s);
+          const show = ok && (s !== '' || vis < shown);
+          c.classList.toggle('hidden', !show);
+          if (show) vis++;
+        });
+        if (more) more.classList.toggle('hidden', s !== '' || shown >= cards.length);
+        if (empty) empty.classList.toggle('hidden', !(s !== '' && vis === 0));
+      }
+      search && search.addEventListener('input', apply);
+      more && more.addEventListener('click', () => { shown += PER; apply(); });
+      apply();
+    })();
+    </script>
+    <?php foot(); exit;
+}
+
+if ($p === 'coach_athlete') {
+    head(t('Fiche athlète'), 'coach');
+    if (!coach_enabled() || !coach_is_coach()) {
+        echo '<div class="alert" data-variant="destructive"><h2>' . t('Accès réservé aux coaches.') . '</h2><p class="text-xs text-muted-foreground">' . t('Active le rôle coach dans tes Paramètres, puis fais-toi confier des athlètes via leur code d’invitation.') . '</p></div>';
+        foot(); exit;
+    }
+    $aid = (int)($_GET['id'] ?? 0);
+    if ($aid <= 0 || !coach_is_active(current_uid(), $aid)) {
+        echo '<div class="alert" data-variant="destructive"><h2>' . t('Tu ne suis pas cet athlète (ou l’accès a été révoqué).') . '</h2><p class="text-xs text-muted-foreground"><a class="underline" href="?p=coach">' . t('← Retour au roster') . '</a></p></div>';
+        foot(); exit;
+    }
+    $au = auth_db()->prepare('SELECT name, email, last_login FROM users WHERE id = ?'); $au->execute([$aid]); $ath = $au->fetch();
+    $lk = auth_db()->prepare('SELECT activated_at FROM coach_links WHERE coach_id = ? AND athlete_id = ? AND status = \'active\'');
+    $lk->execute([current_uid(), $aid]); $since = (int)($lk->fetchColumn() ?: 0);
+
+    $apd = coach_open_db($aid);   // lecture seule de la base de l'athlète
+    /* snapshot : recalcule si périmé (> 15 min) puis relit */
+    $qs = auth_db()->prepare('SELECT ctl, atl, tsb, tss_7j, tss_28j, last_activity, last_sync, alert_level, computed_at FROM coach_snapshots WHERE athlete_id = ?');
+    $qs->execute([$aid]); $snap = $qs->fetch();
+    if ($apd && (!$snap || (int)($snap['computed_at'] ?? 0) < time() - 900)) { coach_snapshot_refresh($aid); $qs->execute([$aid]); $snap = $qs->fetch(); }
+    if (!$apd) {
+        echo '<div class="alert"><h2>' . t('Aucune donnée pour cet athlète.') . '</h2><p class="text-xs text-muted-foreground">' . t('Sa base TRQ n’existe pas encore (il n’a probablement jamais synchronisé).') . '</p></div>';
+        foot(); exit;
+    }
+
+    $ALERT = [
+        0 => [t('Sain'), 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'],
+        1 => [t('Vigilance'), 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'],
+        2 => [t('Surmenage'), 'bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/30'],
+        3 => [t('Inactif'), 'bg-slate-500/15 text-slate-600 dark:text-slate-400 border border-slate-500/30'],
+    ];
+    $al = (int)($snap['alert_level'] ?? 0);
+    $ini = mb_strtoupper(mb_substr(trim((string)($ath['name'] ?? '?')) ?: '?', 0, 1));
+
+    /* PMC recalculé côté coach (même algorithme que pmc()) — 90 derniers jours pour le graphe */
+    $pmc90 = [];
+    $byDate = [];
+    foreach ($apd->query('SELECT substr(date,1,10) d, SUM(COALESCE(tss,0)) t FROM activities GROUP BY d ORDER BY d')->fetchAll() as $q) $byDate[$q['d']] = (float)$q['t'];
+    $n30 = (int)$apd->query("SELECT COUNT(*) FROM activities WHERE substr(date,1,10) >= date('now','-29 days')")->fetchColumn();
+    if ($byDate) {
+        $ctl = $atl = 0.0; $ser = [];
+        $d = new DateTime(array_key_first($byDate));
+        for ($end = new DateTime('today'); $d <= $end; $d->modify('+1 day')) {
+            $k = $d->format('Y-m-d'); $t = $byDate[$k] ?? 0.0;
+            $tsb = $ctl - $atl; $ctl += ($t - $ctl) / 42; $atl += ($t - $atl) / 7;
+            $ser[] = ['k' => $k, 'ctl' => round($ctl, 1), 'atl' => round($atl, 1), 'tsb' => round($tsb, 1)];
+        }
+        $pmc90 = array_slice($ser, -90);
+    }
+
+    $acts = $apd->query('SELECT ' . ACT_COLS . ' FROM activities ORDER BY date DESC LIMIT 20')->fetchAll();
+    $wells = $apd->query('SELECT date, hrv, resting_hr, sleep_sec, sleep_score, readiness FROM wellness ORDER BY date DESC LIMIT 7')->fetchAll();
+    ?>
+    <a href="?p=coach" class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:underline">← <?= t('Retour au roster') ?></a>
+
+    <div class="card p-5 flex flex-wrap items-center gap-4">
+      <span class="flex size-14 shrink-0 items-center justify-center rounded-full bg-primary text-xl font-semibold text-primary-foreground"><?= h($ini) ?></span>
+      <div class="min-w-0 flex-1">
+        <h1 class="truncate text-xl font-bold tracking-tight"><?= h((string)$ath['name']) ?></h1>
+        <p class="truncate text-sm text-muted-foreground"><?= h((string)$ath['email']) ?> · <?= t('accès depuis') ?> <?= date('d/m/Y', $since) ?><?= $ath['last_login'] ? ' · ' . t('Dernière connexion') . ' : ' . h(substr((string)$ath['last_login'], 0, 10)) : '' ?></p>
+      </div>
+      <span class="badge <?= $ALERT[$al][1] ?>"><?= $ALERT[$al][0] ?></span>
+    </div>
+
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      <div class="card p-3"><p class="text-[10px] uppercase tracking-wide text-muted-foreground">CTL · <?= t('forme') ?></p><p class="text-xl font-bold tabular-nums"><?= ($snap['ctl'] ?? null) !== null ? round((float)$snap['ctl']) : '–' ?></p></div>
+      <div class="card p-3"><p class="text-[10px] uppercase tracking-wide text-muted-foreground">ATL · <?= t('fatigue') ?></p><p class="text-xl font-bold tabular-nums"><?= ($snap['atl'] ?? null) !== null ? round((float)$snap['atl']) : '–' ?></p></div>
+      <?php $tsb = ($snap['tsb'] ?? null) === null ? null : (float)$snap['tsb']; ?>
+      <div class="card p-3"><p class="text-[10px] uppercase tracking-wide text-muted-foreground">TSB · <?= t('fraîcheur') ?></p><p class="text-xl font-bold tabular-nums <?= $tsb === null ? '' : ($tsb > 5 ? 'text-emerald-600 dark:text-emerald-400' : ($tsb < -10 ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400')) ?>"><?= $tsb === null ? '–' : ($tsb > 0 ? '+' : '') . round($tsb) ?></p></div>
+      <div class="card p-3"><p class="text-[10px] uppercase tracking-wide text-muted-foreground"><?= t('Charge 7 j') ?></p><p class="text-xl font-bold tabular-nums"><?= (int)($snap['tss_7j'] ?? 0) > 0 ? (int)$snap['tss_7j'] : '–' ?></p></div>
+      <div class="card p-3"><p class="text-[10px] uppercase tracking-wide text-muted-foreground"><?= t('Séances (30 j)') ?></p><p class="text-xl font-bold tabular-nums"><?= $n30 ?></p></div>
+    </div>
+
+    <div class="card"><section class="p-4 space-y-2">
+      <h3 class="text-sm font-semibold"><?= t('Progression de la forme (90 jours)') ?></h3>
+      <div class="h-64"><canvas id="caPmc"></canvas></div>
+      <?php if (!$pmc90): ?><p class="text-xs text-muted-foreground"><?= t('Aucune donnée pour tracer la courbe.') ?></p><?php endif; ?>
+    </section></div>
+
+    <div class="card">
+      <section class="p-4 pb-0"><h3 class="text-sm font-semibold"><?= t('Séances récentes') ?></h3></section>
+      <?php if (!$acts): ?><p class="p-4 text-sm text-muted-foreground"><?= t('Aucune séance enregistrée.') ?></p>
+      <?php else: ?>
+      <div class="table-container border-0"><table class="table">
+        <thead><tr><th><?= t('Date') ?></th><th><?= t('Séance') ?></th><th><?= t('Durée') ?></th><th><?= t('Dist.') ?></th><th><?= t('Charge') ?></th><th>IF</th><th><?= t('Puiss./Allure') ?></th><th>💬</th></tr></thead>
+        <tbody>
+        <?php $cmtsAll = coach_comment_list($aid) ?: []; $cmtsByAct = [];
+        foreach ($cmtsAll as $cq) $cmtsByAct[(string)$cq['activity_id']][] = $cq; ?>
+        <?php foreach ($acts as $a): ?>
+          <tr>
+            <td class="whitespace-nowrap text-xs text-muted-foreground"><?= h(substr((string)$a['date'], 0, 10)) ?></td>
+            <td><div class="font-medium text-sm"><a class="hover:underline" href="?p=coach_activity&aid=<?= $aid ?>&id=<?= h((string)$a['id']) ?>"><?= !empty($cmtsByAct[(string)$a['id']]) ? '💬 ' : '' ?><?= h((string)($a['name'] ?: $a['type'])) ?></a></div><div class="mt-0.5"><?= sport_badge((string)$a['sport'], (string)$a['type']) ?></div></td>
+            <td class="tabular-nums text-xs"><?= fmt_dur((int)$a['duration']) ?></td>
+            <td class="tabular-nums text-xs"><?= $a['distance'] ? n($a['distance'] / 1000, 1) . ' km' : '–' ?></td>
+            <td><?= tss_badge($a['tss'] !== null ? (float)$a['tss'] : null, $a['tss_type'] ?? 'power') ?></td>
+            <td class="tabular-nums text-xs"><?= n($a['if_'], 2) ?></td>
+            <td class="tabular-nums font-semibold text-xs"><?= $a['sport'] === 'run' ? ($a['avg_speed'] ? pace((float)$a['avg_speed']) . ' /km' : '–') : ($a['np'] ? n($a['np']) . ' W' : '–') ?></td>
+            <td class="align-top">
+              <?php $ca = $cmtsByAct[(string)$a['id']] ?? []; ?>
+              <details>
+                <summary class="cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground"><?= t('Commenter') ?><?= $ca ? ' (' . count($ca) . ')' : '' ?></summary>
+                <div class="mt-1 w-64 space-y-1">
+                  <?php foreach ($ca as $cc): ?>
+                    <p class="rounded bg-muted/50 px-2 py-1 text-[11px] leading-snug"><b><?= h($cc['coach_name']) ?></b> · <?= date('d/m H:i', (int)$cc['ts']) ?><br><?= h($cc['body']) ?></p>
+                  <?php endforeach; ?>
+                  <form method="post" action="?p=coach_athlete" class="space-y-1">
+                    <input type="hidden" name="coach_cmt_act" value="c">
+                    <input type="hidden" name="athlete_id" value="<?= $aid ?>">
+                    <input type="hidden" name="activity_id" value="<?= h((string)$a['id']) ?>">
+                    <textarea class="input text-xs" name="body" rows="2" maxlength="2000" placeholder="<?= h(t('Un mot pour ton athlète…')) ?>"></textarea>
+                    <button class="btn w-full" data-size="sm" data-variant="outline" type="submit"><?= t('Envoyer') ?></button>
+                  </form>
+                </div>
+              </details>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody></table></div>
+      <?php endif; ?>
+    </div>
+
+    <div class="card">
+      <section class="p-4 pb-0"><h3 class="text-sm font-semibold"><?= t('Wellness (7 derniers jours)') ?></h3></section>
+      <?php if (!$wells): ?><p class="p-4 text-sm text-muted-foreground"><?= t('Aucune donnée wellness.') ?></p>
+      <?php else: ?>
+      <div class="table-container border-0"><table class="table">
+        <thead><tr><th><?= t('Date') ?></th><th>HRV</th><th><?= t('Sommeil') ?></th><th><?= t('FC repos') ?></th><th><?= t('Readiness') ?></th></tr></thead>
+        <tbody>
+        <?php foreach ($wells as $w): ?>
+          <tr>
+            <td class="whitespace-nowrap text-xs text-muted-foreground"><?= h($w['date']) ?></td>
+            <td class="tabular-nums text-xs"><?= $w['hrv'] !== null ? n($w['hrv'], 1) . ' ms' : '–' ?></td>
+            <td class="tabular-nums text-xs"><?= $w['sleep_sec'] ? fmt_dur((int)$w['sleep_sec']) : '–' ?></td>
+            <td class="tabular-nums text-xs"><?= $w['resting_hr'] !== null ? n($w['resting_hr'], 0) . ' bpm' : '–' ?></td>
+            <td><?= readiness_badge($w['readiness'] !== null ? (float)$w['readiness'] : null) ?></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody></table></div>
+      <?php endif; ?>
+    </div>
+
+    <?php
+    $plans = coach_plan_list($aid);
+    /* bibliothèque structurée du coach (sa propre base) : structures en % → réutilisables sur tout le roster */
+    $libJs = [];
+    foreach (coach_library(current_uid()) as $wo) {
+        $prof = json_decode((string)$wo['profile'], true) ?: [];
+        $libJs[$wo['id']] = [
+            'name' => (string)$wo['name'], 'sport' => (string)$wo['sport'], 'mode' => (string)$wo['mode'], 'unit' => (string)$wo['unit'],
+            'duration' => (int)$wo['duration'], 'tss' => (float)$wo['tss'],
+            'structure' => (string)$wo['structure'], 'profile' => (string)$wo['profile'],
+            'svg' => $prof ? workout_mini_svg($prof, ($wo['mode'] ?? '') === 'hr' ? 'hr' : 'power') : '',
+        ];
+    }
+    ?>
+    <?php if (isset($_GET['err'])): ?>
+      <div class="alert" data-variant="destructive"><h2><?= h((string)$_GET['err']) ?></h2></div>
+    <?php elseif (isset($_GET['cmt'])): ?>
+      <div class="alert"><h2><?= t('Commentaire envoyé à ton athlète.') ?></h2></div>
+    <?php elseif (isset($_GET['plan'])): ?>
+      <div class="alert"><h2><?= $_GET['plan'] === '0' ? t('La séance n’a pas pu être ajoutée.') : t('Séance planifiée ajoutée dans le calendrier de ton athlète.') ?></h2></div>
+    <?php endif; ?>
+
+    <div class="card">
+      <section class="p-4 pb-0"><h3 class="text-sm font-semibold"><?= t('Séances planifiées (à venir)') ?></h3>
+        <p class="text-xs text-muted-foreground"><?= t('Elles apparaissent dans le calendrier de ton athlète, avec les rappels habituels.') ?></p></section>
+      <?php if (!$plans): ?><p class="p-4 text-sm text-muted-foreground"><?= t('Aucune séance planifiée pour l’instant.') ?></p>
+      <?php else: ?>
+      <div class="table-container border-0"><table class="table">
+        <thead><tr><th><?= t('Date') ?></th><th><?= t('Séance') ?></th><th><?= t('Durée') ?></th><th><?= t('Charge') ?></th><th><?= t('Notes') ?></th><th></th></tr></thead>
+        <tbody>
+        <?php foreach ($plans as $pl): ?>
+          <tr>
+            <td class="whitespace-nowrap text-xs text-muted-foreground"><?= h(date('d/m', strtotime((string)$pl['date']))) ?></td>
+            <td><div class="font-medium text-sm"><?= !empty($pl['structure']) ? '🧩 ' : '' ?><?= h((string)$pl['title']) ?></div><div class="mt-0.5"><?= sport_badge((string)$pl['sport']) ?></div></td>
+            <td class="tabular-nums text-xs"><?= $pl['duration'] ? fmt_dur((int)$pl['duration']) : '–' ?></td>
+            <td class="tabular-nums text-xs"><?= $pl['tss'] !== null && (float)$pl['tss'] > 0 ? n((float)$pl['tss'], 0) : '–' ?></td>
+            <td class="text-xs text-muted-foreground"><?= $pl['notes'] ? h((string)$pl['notes']) : '–' ?></td>
+            <td class="text-right">
+              <form method="post" action="?p=coach_athlete" onsubmit="return confirm('<?php echo t('Supprimer') ?> ?')">
+                <input type="hidden" name="coach_plan_act" value="del">
+                <input type="hidden" name="athlete_id" value="<?= $aid ?>">
+                <input type="hidden" name="plan_id" value="<?= (int)$pl['id'] ?>">
+                <button class="btn" data-variant="ghost" data-size="sm" type="submit"><?= t('Supprimer') ?></button>
+              </form>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody></table></div>
+      <?php endif; ?>
+    </div>
+
+    <div class="card">
+      <section class="p-4 pb-0"><h3 class="text-sm font-semibold"><?= t('Planifier une séance') ?></h3>
+        <p class="text-xs text-muted-foreground"><?= t('Elle sera visible par l’athlète dès l’enregistrement.') ?></p></section>
+      <form method="post" action="?p=coach_athlete" class="p-4 grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+        <input type="hidden" name="coach_plan_act" value="add">
+        <input type="hidden" name="athlete_id" value="<?= $aid ?>">
+        <input type="hidden" name="wo_id" value="0">
+        <input type="hidden" name="structure" id="woStructure" value="">
+        <input type="hidden" name="profile" id="woProfile" value="">
+        <input type="hidden" name="mode" id="woMode" value="power">
+        <?php if ($libJs): ?>
+        <label class="text-xs font-medium space-y-1 col-span-2 md:col-span-4"><span>📚 <?= t('Depuis ta bibliothèque de séances structurées') ?></span>
+          <select class="input" id="woLib">
+            <option value="">— <?= t('Séance simple') ?> —</option>
+            <?php foreach ($libJs as $woIdL => $woL): ?>
+              <option value="<?= (int)$woIdL ?>"><?= h($woL['name']) ?> · <?= $woL['duration'] > 0 ? h(fmt_dur($woL['duration'])) . ' · ' : '' ?><?= $woL['tss'] > 0 ? h(n($woL['tss'], 0) . ' TSS') : '' ?></option>
+            <?php endforeach; ?>
+          </select></label>
+        <div class="col-span-2 md:col-span-4 flex items-center gap-3">
+          <div id="woSvg" class="w-40 shrink-0"></div>
+          <p id="woAbsWarn" class="hidden text-xs text-amber-600 dark:text-amber-400"><?= t('Séance en valeurs absolues — vérifie qu’elle correspond au niveau de ton athlète.') ?></p>
+        </div>
+        <?php endif; ?>
+        <label class="text-xs font-medium space-y-1"><span><?= t('Date') ?></span>
+          <input class="input" type="date" name="date" required value="<?= date('Y-m-d') ?>"></label>
+        <label class="text-xs font-medium space-y-1"><span><?= t('Discipline') ?></span>
+          <select class="input" name="sport">
+            <option value="ride"><?= t('Vélo') ?></option>
+            <option value="run"><?= t('Course à pied') ?></option>
+            <option value="swim"><?= t('Natation') ?></option>
+            <option value="other"><?= t('Autre') ?></option>
+          </select></label>
+        <label class="text-xs font-medium space-y-1 col-span-2"><span><?= t('Titre') ?></span>
+          <input class="input" type="text" name="title" maxlength="120" placeholder="<?= h(t('Séance planifiée')) ?>"></label>
+        <label class="text-xs font-medium space-y-1"><span><?= t('Durée (min)') ?></span>
+          <input class="input" type="number" name="duration_min" min="0" max="600" value="60"></label>
+        <label class="text-xs font-medium space-y-1"><span><?= t('Distance (km)') ?></span>
+          <input class="input" type="number" name="distance_km" min="0" max="500" step="0.1"></label>
+        <label class="text-xs font-medium space-y-1"><span>TSS</span>
+          <input class="input" type="number" name="tss" min="0" max="500" step="1"></label>
+        <label class="text-xs font-medium space-y-1 col-span-2 md:col-span-1"><span><?= t('Notes') ?></span>
+          <input class="input" type="text" name="notes" maxlength="255" placeholder="<?= h(t('optionnel')) ?>"></label>
+        <div class="col-span-2 md:col-span-1"><button class="btn w-full" data-size="sm" type="submit"><?= t('Planifier') ?></button></div>
+      </form>
+    </div>
+
+    <?php if ($libJs): ?>
+    <script>
+    (function () {
+      const WOLIB = <?= json_encode($libJs, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+      const sel = document.getElementById('woLib');
+      if (!sel) return;
+      sel.addEventListener('change', () => {
+        const w = WOLIB[sel.value];
+        const f = sel.closest('form');
+        f.wo_id.value = w ? sel.value : '0';
+        document.getElementById('woStructure').value = '';
+        document.getElementById('woProfile').value = '';
+        document.getElementById('woMode').value = 'power';
+        document.getElementById('woSvg').innerHTML = '';
+        document.getElementById('woAbsWarn').classList.add('hidden');
+        if (w) {
+          f.title.value = w.name;
+          f.duration_min.value = w.duration > 0 ? Math.round(w.duration / 60) : '';
+          f.tss.value = w.tss > 0 ? Math.round(w.tss) : '';
+          if (f.sport.querySelector('option[value="' + w.sport + '"]')) f.sport.value = w.sport;
+          f.distance_km.value = '';
+          document.getElementById('woStructure').value = w.structure || '';
+          document.getElementById('woProfile').value = w.profile || '';
+          document.getElementById('woMode').value = w.mode || 'power';
+          document.getElementById('woSvg').innerHTML = w.svg || '';
+          document.getElementById('woAbsWarn').classList.toggle('hidden', w.unit !== 'abs');
+        }
+      });
+    })();
+    </script>
+    <?php endif; ?>
+    <script>
+    (function () {
+      const pmcL = <?= json_encode(array_map(fn($x) => substr($x['k'], 8, 2) . '/' . substr($x['k'], 5, 2), $pmc90)) ?>,
+            pmcCtl = <?= json_encode(array_column($pmc90, 'ctl')) ?>,
+            pmcAtl = <?= json_encode(array_column($pmc90, 'atl')) ?>,
+            pmcTsb = <?= json_encode(array_column($pmc90, 'tsb')) ?>;
+      if (typeof Chart === 'undefined' || !pmcL.length) return;
+      new Chart('caPmc', {
+        type: 'line',
+        data: { labels: pmcL, datasets: [
+          { label: 'CTL (<?= t('forme') ?>)', data: pmcCtl, borderColor: '#6366f1', borderWidth: 2, pointRadius: 0, tension: 0.3 },
+          { label: 'ATL (<?= t('fatigue') ?>)', data: pmcAtl, borderColor: '#f43f5e', borderWidth: 1.5, pointRadius: 0, tension: 0.3 },
+          { label: 'TSB (<?= t('fraîcheur') ?>)', data: pmcTsb, borderColor: '#10b981', borderWidth: 1.5, pointRadius: 0, tension: 0.3 }
+        ] },
+        options: { maintainAspectRatio: false, animation: false, interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
+          scales: { x: { ticks: { maxTicksLimit: 10, font: { size: 10 } } }, y: { ticks: { font: { size: 10 } } } } }
+      });
+    })();
+    </script>
+    <?php foot(); exit;
+}
+
+/* ========================================================
+   COACH — DÉTAIL D'UNE SÉANCE DE L'ATHLÈTE (graphes / laps / commentaires)
+   ======================================================== */
+if ($p === 'coach_activity') {
+    head(t('Séance (vue coach)'), 'coach');
+    if (!coach_enabled() || !coach_is_coach()) {
+        echo '<div class="alert" data-variant="destructive"><h2>' . t('Accès réservé aux coaches.') . '</h2></div>';
+        foot(); exit;
+    }
+    $aid = (int)($_GET['aid'] ?? 0);
+    $actId = trim((string)($_GET['id'] ?? ''));
+    if ($aid <= 0 || $actId === '' || !coach_is_active(current_uid(), $aid)) {
+        echo '<div class="alert" data-variant="destructive"><h2>' . t('Tu ne suis pas cet athlète (ou l’accès a été révoqué).') . '</h2><p class="text-xs text-muted-foreground"><a class="underline" href="?p=coach">' . t('← Retour au roster') . '</a></p></div>';
+        foot(); exit;
+    }
+    $apd = coach_open_db($aid);
+    $a = null;
+    if ($apd) { $stG = $apd->prepare('SELECT * FROM activities WHERE id = ?'); $stG->execute([$actId]); $a = $stG->fetch(); }
+    if (!$a) {
+        echo '<div class="alert" data-variant="destructive"><h2>' . t('Séance introuvable (vue coach).') . '</h2><p class="text-xs text-muted-foreground"><a class="underline" href="?p=coach_athlete&id=' . $aid . '">' . t('← Retour à la fiche') . '</a></p></div>';
+        foot(); exit;
+    }
+
+    /* séries réduites côté serveur (même principe que la page détail : 1 pas, moyennes par bloc) */
+    $S = $a['streams'] ? (json_decode(gzuncompress($a['streams']), true) ?: []) : [];
+    $nStream = stream_length($S);
+    $step = max(1, (int)ceil($nStream / 700));
+    $ds = function (array $x) use ($step): array {
+        $x = clean($x);
+        if ($step === 1) return $x;
+        $o = [];
+        for ($i = 0, $n = count($x); $i < $n; $i += $step) {
+            $c = array_slice($x, $i, $step);
+            $o[] = round(array_sum($c) / count($c), 1);
+        }
+        return $o;
+    };
+    $pwSeries = !empty($S['watts']) ? $ds($S['watts']) : [];
+    $hrSeries = !empty($S['heartrate']) ? $ds($S['heartrate']) : [];
+    $spdSeries = !empty($S['velocity_smooth']) ? array_map(fn($v) => round($v * 3.6, 1), $ds($S['velocity_smooth'])) : [];
+    $altSeries = !empty($S['altitude']) ? $ds($S['altitude']) : [];
+    $nAxis = max(count($pwSeries), count($hrSeries), count($spdSeries), count($altSeries));
+    $xAxis = array_map(fn($i) => round($i * $step / 60, 1), range(0, max(0, $nAxis - 1)));
+
+    /* ftp/lthr de l'ATHLÈTE (sa base) si disponibles → zones / repères */
+    $aFtp = 0.0; $aLthr = 0.0;
+    try {
+        foreach ($apd->query("SELECT k, v FROM settings WHERE k IN ('ftp','lthr')")->fetchAll() as $kv) {
+            if ($kv['k'] === 'ftp') $aFtp = (float)$kv['v'];
+            if ($kv['k'] === 'lthr') $aLthr = (float)$kv['v'];
+        }
+    } catch (\Throwable $e) {}
+    [$laps, $lapSource] = laps_for_view($a, $S, $aFtp);
+    $cmts = coach_comment_list($aid, $actId);
+    ?>
+    <a href="?p=coach_athlete&id=<?= $aid ?>" class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:underline">← <?= t('Fiche athlète') ?></a>
+
+    <?php if (isset($_GET['cmt'])): ?><div class="alert"><h2><?= t('Commentaire envoyé à ton athlète.') ?></h2></div><?php endif; ?>
+    <?php if (isset($_GET['err'])): ?><div class="alert" data-variant="destructive"><h2><?= h((string)$_GET['err']) ?></h2></div><?php endif; ?>
+
+    <div class="card p-5 flex flex-wrap items-center gap-4">
+      <div class="min-w-0 flex-1">
+        <h1 class="truncate text-xl font-bold tracking-tight"><?= h((string)($a['name'] ?: $a['type'])) ?></h1>
+        <p class="text-sm text-muted-foreground"><?= h(substr((string)$a['date'], 0, 10)) ?> · <?= fmt_dur((int)$a['duration']) ?> · <?= $a['distance'] ? n($a['distance'] / 1000, 1) . ' km · ' : '' ?><?= tss_badge($a['tss'] !== null ? (float)$a['tss'] : null, $a['tss_type'] ?? 'power') ?></p>
+      </div>
+      <span class="flex items-center gap-1.5"><?= sport_badge((string)$a['sport'], (string)$a['type']) ?></span>
+    </div>
+
+    <?php if (!$nStream): ?>
+      <div class="alert"><h2><?= t('Pas de streams pour cette séance (aucun fichier importé).') ?></h2></div>
+    <?php else: ?>
+    <div class="card"><section class="p-4 space-y-2">
+      <h3 class="text-sm font-semibold"><?= t('Courbes (puissance / FC / vitesse)') ?></h3>
+      <div class="h-64"><canvas id="caStreams"></canvas></div>
+      <p class="text-xs text-muted-foreground"><?= $aFtp > 0 ? 'FTP de l’athlète : ' . n($aFtp, 0) . ' W · ' . t('LTHR') . ' : ' . n($aLthr, 0) . ' bpm' : t('FTP/LTHR de l’athlète non configurés (chez lui).') ?></p>
+    </section></div>
+
+    <?php if ($laps): ?>
+    <div class="card">
+      <section class="p-4 pb-0"><h3 class="text-sm font-semibold"><?= t('Séquences détectées') ?></h3>
+        <p class="text-xs text-muted-foreground"><?= $lapSource === 'manual' ? t('découpage personnalisé') : ($lapSource === 'icu' ? t('tours de l’appareil') : t('intervalles détectés')) ?></p></section>
+      <div class="table-container border-0"><table class="table">
+        <thead><tr><th>#</th><th><?= t('Séance') ?></th><th><?= t('Durée') ?></th><th><?= t('Dist.') ?></th><th><?= t('Puiss.') ?></th><th>IF</th><th><?= t('FC moy.') ?></th><th><?= t('FC max') ?></th></tr></thead>
+        <tbody>
+        <?php foreach ($laps as $iv): ?>
+          <tr class="<?= !empty($iv['is_work']) ? 'bg-primary/5 font-medium' : '' ?>">
+            <td class="font-bold text-xs"><?= (int)($iv['id'] ?? 0) ?></td>
+            <td><span class="badge" data-variant="<?= !empty($iv['is_work']) ? 'default' : 'outline' ?>"><?= h((string)($iv['label'] ?? (!empty($iv['is_work']) ? 'Effort' : 'Récup'))) ?></span></td>
+            <td class="tabular-nums text-xs"><?= fmt_dur((int)($iv['duration'] ?? 0)) ?></td>
+            <td class="tabular-nums text-xs"><?= !empty($iv['distance']) ? n($iv['distance'] / 1000, 2) . ' km' : '–' ?></td>
+            <td class="tabular-nums text-xs font-semibold"><?= !empty($iv['avg_w']) ? n((float)$iv['avg_w']) . ' W' : '–' ?></td>
+            <td class="tabular-nums text-xs"><?= !empty($iv['if_']) ? n((float)$iv['if_'], 2) : '–' ?></td>
+            <td class="tabular-nums text-xs"><?= !empty($iv['avg_hr']) ? round((float)$iv['avg_hr']) : '–' ?></td>
+            <td class="tabular-nums text-xs"><?= !empty($iv['max_hr']) ? round((float)$iv['max_hr']) : '–' ?></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody></table></div>
+    </div>
+    <?php endif; ?>
+    <?php endif; ?>
+
+    <div class="card">
+      <section class="p-4 pb-0"><h3 class="text-sm font-semibold"><?= t('Commentaires du coach') ?><?= $cmts ? ' (' . count($cmts) . ')' : '' ?></h3></section>
+      <div class="p-4 space-y-2">
+        <?php foreach ($cmts as $cc): ?>
+          <p class="rounded bg-muted/50 px-3 py-2 text-sm"><b><?= h($cc['coach_name']) ?></b> · <span class="text-xs text-muted-foreground"><?= date('d/m/Y H:i', (int)$cc['ts']) ?></span><br><?= h($cc['body']) ?></p>
+        <?php endforeach; ?>
+        <?php if (!$cmts): ?><p class="text-sm text-muted-foreground"><?= t('Aucun commentaire pour l’instant.') ?></p><?php endif; ?>
+        <form method="post" action="?p=coach_activity" class="space-y-2">
+          <input type="hidden" name="coach_cmt_act" value="c">
+          <input type="hidden" name="athlete_id" value="<?= $aid ?>">
+          <input type="hidden" name="activity_id" value="<?= h($actId) ?>">
+          <textarea class="input" name="body" rows="3" maxlength="2000" placeholder="<?= h(t('Un mot pour ton athlète…')) ?>"></textarea>
+          <button class="btn" data-size="sm" type="submit"><?= t('Envoyer') ?></button>
+        </form>
+      </div>
+    </div>
+
+    <?php if ($nStream): ?>
+    <script>
+    (function () {
+      const x = <?= json_encode($xAxis) ?>,
+            pw = <?= json_encode($pwSeries) ?>,
+            hr = <?= json_encode($hrSeries) ?>,
+            spd = <?= json_encode($spdSeries) ?>;
+      if (typeof Chart === 'undefined' || !x.length) return;
+      const D = [
+        { label: 'W', data: pw, yAxisID: 'y', borderColor: '#10b981', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
+        { label: 'bpm', data: hr, yAxisID: 'y1', borderColor: '#f43f5e', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
+        { label: 'km/h', data: spd, yAxisID: 'y1', borderColor: '#3b82f6', borderWidth: 1.5, pointRadius: 0, tension: 0.2 }
+      ].filter(d => d.data.length);
+      new Chart('caStreams', {
+        type: 'line',
+        data: { labels: x, datasets: D },
+        options: { maintainAspectRatio: false, animation: false,
+          plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
+          interaction: { mode: 'index', intersect: false },
+          scales: { x: { ticks: { maxTicksLimit: 10, font: { size: 10 } }, title: { display: true, text: 'min', font: { size: 10 } } },
+            y: { position: 'left', ticks: { font: { size: 10 } }, title: { display: true, text: 'W', font: { size: 10 } } },
+            y1: { position: 'right', grid: { drawOnChartArea: false }, ticks: { font: { size: 10 } }, title: { display: true, text: 'bpm / km/h', font: { size: 10 } } }
+          } }
+      });
+    })();
+    </script>
+    <?php endif; ?>
+    <?php foot(); exit;
+}
+
 if ($p === 'zones') {
-    head('Zones d’entraînement', 'zones');
+    head(t('Zones d’entraînement'), 'zones');
     $lthr = (float)cfg('lthr', 0);
     $runThrPace = (int)cfg('run_thr_pace', 0);
 
@@ -4691,7 +5882,7 @@ if ($p === 'zones') {
    PROGRESSION (RAPPORT HEBDO / EFFICIENCE / RECORDS)
    ======================================================== */
 if ($p === 'progress') {
-    head('Progression', 'progress');
+    head(t('Progression'), 'progress');
     if (!$count) { empty_state(); foot(); exit; }
 
     $wks = array_values(progress_weeks(10));
@@ -4952,7 +6143,7 @@ if ($p === 'progress') {
    PARAMÈTRES (SETTINGS)
    ======================================================== */
 if ($p === 'settings') {
-    head('Paramètres', 'settings');
+    head(t('Paramètres'), 'settings');
     $pt = (int)cfg('run_thr_pace', 0);
     $f = fn($k, $d = '') => h(cfg($k, $d));
     ?>
@@ -4969,11 +6160,22 @@ if ($p === 'settings') {
           <h3 class="text-base font-semibold">Apparence</h3>
           <p class="text-xs text-muted-foreground">Style de l'interface (Basecoat) — appliqué immédiatement, mémorisé sur cet appareil</p>
         </header>
-        <div class="field max-w-56">
-          <label class="text-xs font-medium">Style</label>
-          <select id="styleSel" class="select h-9 text-sm">
-            <?php foreach (['vega', 'nova', 'maia', 'lyra', 'mira', 'luma', 'sera', 'rhea'] as $s) echo '<option value="' . $s . '">' . ucfirst($s) . '</option>'; ?>
-          </select>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div class="field">
+            <label class="text-xs font-medium">Style</label>
+            <select id="styleSel" class="select h-9 text-sm">
+              <?php foreach (['vega', 'nova', 'maia', 'lyra', 'mira', 'luma', 'sera', 'rhea'] as $s) echo '<option value="' . $s . '">' . ucfirst($s) . '</option>'; ?>
+            </select>
+          </div>
+          <form method="post" action="?p=settings" class="field">
+            <label class="text-xs font-medium" for="langSel">Langue / Language</label>
+            <select id="langSel" name="lang" class="select h-9 text-sm" onchange="this.form.submit()">
+              <?php foreach (trq_langs() as $trqLc => $trqLn): ?>
+              <option value="<?= $trqLc ?>"<?= trq_lang() === $trqLc ? ' selected' : '' ?>><?= htmlspecialchars($trqLn, ENT_QUOTES, 'UTF-8') ?></option>
+              <?php endforeach; ?>
+            </select>
+            <noscript><button class="btn mt-2" data-size="sm" type="submit">OK</button></noscript>
+          </form>
         </div>
       </div>
 
@@ -4988,13 +6190,29 @@ if ($p === 'settings') {
         <div class="alert"><h3>Bienvenue sur TRQ 👋</h3><p class="text-xs text-muted-foreground">Pour commencer : renseignez votre clé API intervals.icu et vos seuils ci-dessous, enregistrez, puis lancez « Synchroniser ». Vous pouvez aussi générer des données de démonstration depuis le tableau de bord.</p></div>
       <?php endif; ?>
 
+      <?php if (isset($_GET['err'])): ?>
+        <div class="alert" data-variant="destructive"><h2><?= h((string)$_GET['err']) ?></h2></div>
+      <?php endif; ?>
+
       <?php if (auth_enabled()): $cu = current_user(); ?>
       <div class="card p-6 space-y-4">
         <header class="flex items-start justify-between gap-3">
           <div><h3 class="text-base font-semibold">Mon compte</h3>
-            <p class="text-xs text-muted-foreground"><?= h($cu['name']) ?> · <?= h($cu['email']) ?> · <?= $cu['role'] === 'admin' ? 'administrateur' : 'utilisateur' ?></p></div>
+            <p class="text-xs text-muted-foreground"><?= h($cu['name']) ?> · <?= h($cu['email']) ?> · <?= $cu['role'] === 'admin' ? 'administrateur' : ($cu['role'] === 'coach' ? 'coach' : 'utilisateur') ?></p></div>
           <form method="post" action="login.php?a=logout"><button class="btn" data-variant="outline" data-size="sm" type="submit">Se déconnecter</button></form>
         </header>
+        <form method="post" enctype="multipart/form-data" action="?p=settings" class="flex flex-wrap items-center gap-3">
+          <input type="hidden" name="avatar_post" value="1">
+          <?php $av = avatar_info(); ?>
+          <?php if ($av): ?><img class="size-12 rounded-full object-cover border" alt="" src="?p=avatar&v=<?= (int)$av['ts'] ?>"><?php else: ?><span class="flex size-12 shrink-0 items-center justify-center rounded-full bg-primary text-lg font-semibold text-primary-foreground"><?= h(mb_strtoupper(mb_substr(trim((string)$cu['name']) ?: '?', 0, 1))) ?></span><?php endif; ?>
+          <div class="min-w-0">
+            <p class="text-sm font-medium">Photo de profil</p>
+            <p class="text-xs text-muted-foreground">JPEG, PNG, WebP ou GIF · 4 Mo max · recadrée en carré 256px si possible</p>
+          </div>
+          <input class="input h-9 w-auto max-w-full text-sm" type="file" name="avatar_file" accept="image/jpeg,image/png,image/webp,image/gif">
+          <button class="btn" data-size="sm" type="submit">Enregistrer la photo</button>
+          <?php if ($av): ?><button class="btn" data-variant="ghost" data-size="sm" type="submit" name="avatar_remove" value="1">Supprimer</button><?php endif; ?>
+        </form>
         <div class="grid gap-3 sm:grid-cols-3">
           <div class="field"><label class="text-xs font-medium">Mot de passe actuel</label><input class="input text-sm" type="password" id="pwCur" autocomplete="current-password"></div>
           <div class="field"><label class="text-xs font-medium">Nouveau mot de passe</label><input class="input text-sm" type="password" id="pwNew" autocomplete="new-password"></div>
@@ -5008,7 +6226,16 @@ if ($p === 'settings') {
         </details>
       </div>
       <script>
-      document.getElementById('pwChangeBtn')?.addEventListener('click', async () => {
+      document.addEventListener('click', async (ev) => {   // délégation : la carte coach est rendue plus bas dans le DOM
+      const btn = ev.target instanceof Element ? ev.target.closest('#coachCodeCopy') : null;
+      if (!btn) return;
+      const code = (btn.closest('div.card')?.querySelector('code')?.textContent ?? '').trim();
+      if (!code) return;
+      try { await navigator.clipboard.writeText(code); btn.textContent = '✓'; }
+      catch (e) { btn.textContent = code; }
+      setTimeout(() => { btn.textContent = <?= json_encode(t('Copier')) ?>; }, 1600);
+    });
+    document.getElementById('pwChangeBtn')?.addEventListener('click', async () => {
         const m = document.getElementById('pwMsg'); m.className = 'text-xs text-muted-foreground'; m.textContent = '…';
         try {
           await call('account_password', {current: pwCur.value, new: pwNew.value, new2: pwNew2.value});
@@ -5070,6 +6297,33 @@ if ($p === 'settings') {
 
         <div class="card p-6 space-y-4">
           <header>
+            <h3 class="text-base font-semibold">Profil athlète</h3>
+            <p class="text-xs text-muted-foreground">Personnalise les diagnostics et les conseils du coach selon ton expérience et tes disciplines</p>
+          </header>
+          <div class="grid sm:grid-cols-2 gap-4">
+            <div class="field">
+              <label class="text-xs font-medium" for="profileLevel">Niveau</label>
+              <select id="profileLevel" name="profile_level" class="select h-9 text-sm">
+                <?php foreach (['debutant' => 'Débutant', 'intermediaire' => 'Intermédiaire', 'confirme' => 'Confirmé', 'elite' => 'Élite', 'pro' => 'Pro'] as $k => $l): ?>
+                  <option value="<?= $k ?>"<?= cfg('profile_level', 'intermediaire') === $k ? ' selected' : '' ?>><?= $l ?></option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+            <div class="field">
+              <label class="text-xs font-medium">Disciplines</label>
+              <div class="flex flex-wrap gap-x-4 gap-y-2 text-sm">
+                <?php $curSports = array_map('trim', explode(',', (string)cfg('profile_sports', 'road'))); ?>
+                <?php foreach (['road' => 'Vélo route', 'mtb' => 'VTT', 'run' => 'Course à pied', 'tri' => 'Triathlon'] as $k => $l): ?>
+                  <label class="flex items-center gap-1.5"><input type="checkbox" name="profile_sports[]" value="<?= $k ?>"<?= in_array($k, $curSports, true) ? ' checked' : '' ?>> <?= $l ?></label>
+                <?php endforeach; ?>
+              </div>
+            </div>
+          </div>
+          <p class="text-[11px] text-muted-foreground">Utilisé par la carte « Ta forme du jour » et le diagnostic des sorties : seuils de charge et conseils adaptés à ton niveau (un 300 TSS sur une sortie ne veut pas dire la même chose pour un débutant et un pro). Les calculs physiologiques (CTL, ATL, TSB) restent inchangés.</p>
+        </div>
+
+        <div class="card p-6 space-y-4">
+          <header>
             <h3 class="text-base font-semibold">Seuils physiologiques de performance</h3>
             <p class="text-xs text-muted-foreground">Utilisés pour le calcul du TSS différencié (Power TSS, hrTSS, rTSS) et les zones</p>
           </header>
@@ -5123,6 +6377,96 @@ if ($p === 'settings') {
         </div>
       </form>
 
+        <?php if (auth_enabled()): ?>
+        <?php $cuC = current_user(); $isCoach = coach_is_coach();
+              $myCoaches = coach_coached_by((int)$me['id']);
+              $pendingReq = coach_pending((int)$me['id']);
+              $myInvite = coach_invite_get((int)$me['id']);
+              $coachFlash = $_SESSION['coach_flash'] ?? null; if ($coachFlash !== null) unset($_SESSION['coach_flash']);
+              $coachMsg = $_SESSION['coach_flash_msg'] ?? null; if ($coachMsg !== null) unset($_SESSION['coach_flash_msg']); ?>
+        <div class="card p-6 space-y-4">
+          <header>
+            <h3 class="text-base font-semibold">Module coach</h3>
+            <p class="text-xs text-muted-foreground">Partage entraîneur/athlète : c'est toi qui invites, qui acceptes et qui peux révoquer à tout moment</p>
+          </header>
+
+          <?php if ($coachMsg): ?>
+            <div class="rounded-lg border px-3 py-2 text-sm <?= $coachMsg['ok'] ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive' ?>"><?= h((string)$coachMsg['msg']) ?></div>
+          <?php endif; ?>
+
+          <?php if ($isCoach): ?>
+          <div class="rounded-lg border p-3 space-y-3">
+            <div class="flex flex-wrap items-center gap-3">
+              <span class="badge" data-variant="default">Coach</span>
+              <p class="text-xs text-muted-foreground flex-1 min-w-56">Ton compte a le rôle coach : le tableau de bord de pilotage de tes athlètes arrivera dans la prochaine brique du module.</p>
+              <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="role"><button class="btn" data-variant="outline" data-size="sm" type="submit">Ne plus être coach</button></form>
+            </div>
+            <form method="post" action="?p=settings" class="flex flex-wrap items-end gap-2">
+              <input type="hidden" name="coach_act" value="join">
+              <div class="field"><label class="text-xs font-medium" for="coachJoinCode">Rejoindre un athlète : entre son code d’invitation</label>
+                <input class="input h-9 w-40 font-mono uppercase tracking-widest text-sm" name="code" id="coachJoinCode" maxlength="6" placeholder="A7K3QZ" autocomplete="off" required></div>
+              <button class="btn" data-size="sm" type="submit">Envoyer la demande</button>
+            </form>
+          </div>
+          <?php else: ?>
+          <div class="flex flex-wrap items-center gap-3">
+            <p class="text-xs text-muted-foreground flex-1 min-w-56">Tu encordes des athlètes ? Passe ton compte en rôle coach pour pouvoir recevoir leurs données et suivre leur entraînement.</p>
+            <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="role"><button class="btn" data-variant="outline" data-size="sm" type="submit">Devenir coach</button></form>
+          </div>
+          <?php endif; ?>
+
+          <?php if ($pendingReq): ?>
+          <div class="space-y-2">
+            <p class="text-sm font-medium">Demandes d’accès à ton compte <span class="text-muted-foreground">(<?= count($pendingReq) ?>)</span></p>
+            <?php foreach ($pendingReq as $pr): ?>
+            <div class="flex flex-wrap items-center gap-2 rounded-lg border p-2.5">
+              <div class="min-w-0 flex-1"><p class="text-sm font-medium truncate"><?= h((string)$pr['name']) ?></p>
+                <p class="text-xs text-muted-foreground truncate"><?= h((string)$pr['email']) ?></p></div>
+              <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="accept"><input type="hidden" name="link_id" value="<?= (int)$pr['id'] ?>"><button class="btn" data-size="sm" type="submit">Accepter</button></form>
+              <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="reject"><input type="hidden" name="link_id" value="<?= (int)$pr['id'] ?>"><button class="btn" data-variant="ghost" data-size="sm" type="submit">Refuser</button></form>
+            </div>
+            <?php endforeach; ?>
+          </div>
+          <?php endif; ?>
+
+          <?php if ($myCoaches): ?>
+          <div class="space-y-2">
+            <p class="text-sm font-medium"><?= count($myCoaches) > 1 ? 'Tes coaches' : 'Ton coach' ?> <span class="text-muted-foreground">(<?= count($myCoaches) ?>)</span></p>
+            <?php foreach ($myCoaches as $mc): ?>
+            <div class="flex flex-wrap items-center gap-2 rounded-lg border p-2.5">
+              <div class="min-w-0 flex-1"><p class="text-sm font-medium truncate"><?= h((string)$mc['name']) ?></p>
+                <p class="text-xs text-muted-foreground truncate"><?= h((string)$mc['email']) ?> · accès total depuis <?= date('d/m/Y', (int)$mc['activated_at']) ?></p></div>
+              <form method="post" action="?p=settings" onsubmit="return confirm('Révoquer l’accès de ce coach ? Une fois révoqué, il ne voit plus rien de tes données.')"><input type="hidden" name="coach_act" value="revoke"><input type="hidden" name="coach_id" value="<?= (int)$mc['coach_id'] ?>"><button class="btn" data-variant="destructive" data-size="sm" type="submit">Révoquer</button></form>
+            </div>
+            <?php endforeach; ?>
+            <p class="text-[11px] text-muted-foreground">Un coach actif voit tout : séances, diagnostic, forme, récupération et planification. Tu peux le révoquer à tout instant — il ne conserve aucune copie.</p>
+          </div>
+          <?php endif; ?>
+
+          <?php if ($myInvite): $hrs = max(1, (int)ceil(((int)$myInvite['expires_at'] - time()) / 3600));
+                $codeShow = (string)($coachFlash['code'] ?? ($myInvite['code'] ?? '')); ?>
+          <div class="rounded-lg border border-primary/40 bg-primary/5 px-3 py-3 space-y-2">
+            <p class="text-sm font-medium">Ton code d’invitation — encore valable ≈ <?= $hrs ?> h, utilisable une seule fois :</p>
+            <?php if ($codeShow !== ''): ?>
+            <div class="flex flex-wrap items-center gap-3">
+              <code class="font-mono text-2xl tracking-widest font-semibold"><?= h($codeShow) ?></code>
+              <button type="button" class="btn" data-size="sm" id="coachCodeCopy"><?= t('Copier') ?></button>
+            </div>
+            <?php else: ?>
+            <p class="text-xs text-muted-foreground">Ce code a été créé avant l’affichage permanent et ne peut plus être retrouvé : régénère-en un ci-dessous.</p>
+            <?php endif; ?>
+            <p class="text-xs text-muted-foreground">Communique-le à un seul coach : il l’entre de son côté, puis tu reçois une demande à accepter ci-dessous. Tu peux le réafficher ici tant qu’il est valable.</p>
+          </div>
+          <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="invite_cancel"><button class="btn" data-variant="ghost" data-size="sm" type="submit">Annuler le code</button></form>
+          <?php else: ?>
+          <div class="flex flex-wrap items-center gap-3">
+            <p class="text-xs text-muted-foreground flex-1 min-w-56">Pour être suivi par un coach : génère un code et communique-le-lui (valable 24 h, usage unique).</p>
+            <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="invite"><button class="btn" data-size="sm" type="submit">Générer un code d’invitation</button></form>
+          </div>
+          <?php endif; ?>
+        </div>
+        <?php endif; ?>
+
     </div>
     <?php ?>
     <script>
@@ -5147,7 +6491,7 @@ if ($p === 'settings') {
    PAGE NUTRITION — cibles issues du statement UCI 2026
    ======================================================== */
 if ($p === 'nutrition') {
-    head('Nutrition', 'nutrition');
+    head(t('Nutrition'), 'nutrition');
     $kg = nutrition_weight();
     $bfRaw = cfg('body_fat');
     $bf = ($bfRaw !== null && (float)$bfRaw > 0) ? (float)$bfRaw : null;
@@ -5319,7 +6663,7 @@ if ($p === 'nutrition') {
 }
 
 http_response_code(404);
-head('Page introuvable', '');
+head(t('Page introuvable'), '');
 echo '<div class="card p-8 text-center max-w-md mx-auto my-12">';
 echo '<h2 class="text-xl font-bold">Page introuvable</h2>';
 echo '<p class="text-sm text-muted-foreground mt-2 mb-4">La page demandée n’existe pas.</p>';
