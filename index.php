@@ -60,7 +60,10 @@ if ($p === 'settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $meC = current_uid();
             $actC = (string)$_POST['coach_act'];
             try {
-                if ($actC === 'role') coach_role_toggle($meC);
+                if ($actC === 'role') {
+                    $nr = coach_role_toggle($meC);
+                    if ($nr === 'admin') $_SESSION['coach_flash_msg'] = ['ok' => false, 'msg' => 'Ton compte est administrateur : il dispose du rôle coach de fait, qui ne peut pas être retiré.'];
+                }
                 elseif ($actC === 'invite') $_SESSION['coach_flash'] = coach_invite_create($meC);
                 elseif ($actC === 'invite_cancel') coach_invite_revoke($meC);
                 elseif ($actC === 'accept') coach_accept($meC, (int)($_POST['link_id'] ?? 0));
@@ -6731,7 +6734,11 @@ if ($p === 'settings') {
             <div class="flex flex-wrap items-center gap-3">
               <span class="badge" data-variant="default">Coach</span>
               <p class="text-xs text-muted-foreground flex-1 min-w-56">Ton compte a le rôle coach : le tableau de bord de pilotage de tes athlètes arrivera dans la prochaine brique du module.</p>
-              <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="role"><button class="btn" data-variant="outline" data-size="sm" type="submit">Ne plus être coach</button></form>
+              <?php if (($cuC['role'] ?? '') === 'admin'): ?>
+                <span class="badge" data-variant="secondary" title="Ton compte est administrateur : il dispose du rôle coach de fait, non retirable ici.">admin = coach de fait</span>
+              <?php else: ?>
+                <form method="post" action="?p=settings"><input type="hidden" name="coach_act" value="role"><button class="btn" data-variant="outline" data-size="sm" type="submit">Ne plus être coach</button></form>
+              <?php endif; ?>
             </div>
             <form method="post" action="?p=settings" class="flex flex-wrap items-end gap-2">
               <input type="hidden" name="coach_act" value="join">
