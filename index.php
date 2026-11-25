@@ -1235,6 +1235,55 @@ if ($p === 'dashboard') {
       ?>
     </div>
 
+    <?php /* Mon prochain entraînement (style TrainingPeaks) */
+    $nextPlan = null;
+    try { $nextPlan = $pdo->query("SELECT * FROM planned_workouts WHERE completed=0 AND substr(date,1,10) >= date('now') ORDER BY substr(date,1,10), id LIMIT 1")->fetch() ?: null; } catch (Throwable $e) {}
+    if ($nextPlan):
+        $npDay  = substr((string)$nextPlan['date'], 0, 10);
+        $npDays = (int)floor((strtotime($npDay) - strtotime(date('Y-m-d'))) / 86400);
+        $npWhen = $npDays <= 0 ? ucfirst(t('aujourd\'hui')) : ($npDays === 1 ? ucfirst(t('demain')) : sprintf(t('dans %d jours'), $npDays));
+        $npStruct = $nextPlan['structure'] ? (json_decode((string)$nextPlan['structure'], true) ?: []) : [];
+        $npText = '';
+        if ($npStruct) {
+            $npText = trim((string)($nextPlan['icu_text'] ?? ''));
+            if ($npText === '') $npText = coach_plan_text((string)$nextPlan['structure'], ($nextPlan['tss_type'] ?? '') === 'hrtss' ? 'hr' : 'power');
+        }
+    ?>
+    <div class="card" id="nextPlanCard">
+      <header class="p-4 border-b flex flex-wrap items-center justify-between gap-2">
+        <div class="flex items-center gap-3 min-w-0">
+          <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-sky-500/15 text-lg">⏭️</span>
+          <div class="min-w-0">
+            <h3 class="truncate text-base font-semibold leading-tight"><?= $npStruct ? '🧩 ' : '📝 ' ?><?= h((string)$nextPlan['title']) ?></h3>
+            <p class="text-xs text-muted-foreground">Mon prochain entraînement · <?= $npWhen ?> · <?= h(date('d/m', strtotime($npDay))) ?></p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <?php if ($nextPlan['tss'] !== null && (float)$nextPlan['tss'] > 0): ?><span class="badge"><?= n((float)$nextPlan['tss']) ?> TSS</span><?php endif; ?>
+          <a class="btn" data-variant="outline" data-size="sm" href="?p=calendar">Voir au calendrier</a>
+        </div>
+      </header>
+      <section class="p-4 space-y-3">
+        <div class="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+          <?= sport_badge((string)$nextPlan['sport']) ?>
+          <?php if (!empty($nextPlan['duration'])): ?><span class="tabular-nums">⏱️ <?= fmt_dur((int)$nextPlan['duration']) ?></span><?php endif; ?>
+          <?php if (!empty($nextPlan['distance'])): ?><span class="tabular-nums">📏 <?= n((float)$nextPlan['distance'] / 1000) ?> km</span><?php endif; ?>
+          <?php if ($npStruct): ?><span class="text-muted-foreground"><?= ($nextPlan['tss_type'] ?? '') === 'hrtss' ? 'cibles en % LTHR' : 'cibles en % FTP' ?></span><?php endif; ?>
+        </div>
+        <?php if ($npStruct): ?>
+        <details class="rounded-lg border p-3">
+          <summary class="cursor-pointer text-sm font-medium">🧩 Séance structurée — <?= count($npStruct) ?> bloc(s) · détail des intervalles</summary>
+          <pre class="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground"><?= h($npText) ?></pre>
+          <a class="btn mt-3" data-variant="outline" data-size="sm" href="?p=workouts&plan=<?= (int)$nextPlan['id'] ?>">Ouvrir dans le builder</a>
+        </details>
+        <?php endif; ?>
+        <?php if (trim((string)($nextPlan['notes'] ?? '')) !== ''): ?>
+        <p class="rounded-lg bg-muted/50 px-3 py-2 text-xs leading-relaxed text-muted-foreground">💬 <?= h((string)$nextPlan['notes']) ?></p>
+        <?php endif; ?>
+      </section>
+    </div>
+    <?php endif; ?>
+
     <?php $form = form_narrative($sport); if ($form): ?>
     <div class="card" id="formCard">
       <section class="p-5">

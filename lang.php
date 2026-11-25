@@ -238,6 +238,7 @@ function trq_i18n(): array {
     'Données de récupération manquantes' => 'Recovery data missing',
     'HRV / FC repos non synchronisés depuis plus de 2 jours — vérifie la connexion wellness (intervals.icu).' => 'HRV / resting HR not synced for more than 2 days — check the wellness connection (intervals.icu).',
     'demain' => 'tomorrow',
+    'dans %d jours' => 'in %d days',
     'aujourd’hui' => 'today',
     'Données existantes détectées' => 'Existing data detected',
     'Données invalides.' => 'Invalid data.',
