@@ -4531,7 +4531,10 @@ if ($p === 'calendar') {
     $monthEnd = (clone $firstDayOfMonth)->modify('last day of this month');
     if ((int)$monthEnd->format('N') < 7) $monthEnd->modify('+' . (7 - (int)$monthEnd->format('N')) . ' days');
 
-    $weekStart = (new DateTime('today'))->modify('monday this week');
+    /* vue semaine (mobile) : le paramètre ?d= des boutons ←/→ est désormais lu (avant : toujours la semaine d'aujourd'hui) */
+    $dParam = (string)($_GET['d'] ?? '');
+    $weekBase = preg_match('/^\d{4}-\d{2}-\d{2}$/', $dParam) ? new DateTime($dParam) : new DateTime('today');
+    $weekStart = (clone $weekBase)->modify('monday this week');
     $weekEnd = (clone $weekStart)->modify('+6 days');
     $prevW = (clone $weekStart)->modify('-7 days')->format('Y-m-d');
     $nextW = (clone $weekStart)->modify('+7 days')->format('Y-m-d');
