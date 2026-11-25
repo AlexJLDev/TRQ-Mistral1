@@ -677,6 +677,7 @@ if (coach_enabled() && coach_is_coach()) $groups[t('Pilotage')] = ['coach'];   /
 <?php }
 
 function foot(): void { ?>
+  <?php global $NOTE_TYPES, $nNotifs, $notifUnread; // rendu dans foot() : les variables top-level ne sont pas en portée dans une fonction ?>
   </div>
 </main>
 
