@@ -185,7 +185,46 @@ if ($p === 'wellness' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
+/* ---------- Notes du calendrier : types prédéfinis ---------- */
+$NOTE_TYPES = [
+    'off'     => ['🏖️', 'Congé', 'bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30'],
+    'injury'  => ['🩹', 'Blessure', 'bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30'],
+    'rest'    => ['😴', 'Repos', 'bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/30'],
+    'travel'  => ['✈️', 'Voyage', 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30'],
+    'sick'    => ['🤒', 'Maladie', 'bg-pink-500/15 text-pink-700 dark:text-pink-300 border-pink-500/30'],
+    'race'    => ['🏁', 'Compétition', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'],
+    'custom'  => ['📝', 'Personnalisée', 'bg-slate-500/15 text-slate-700 dark:text-slate-300 border-slate-500/30'],
+];
+
 /* ---------- Post Workout rapide ---------- */
+if ($p === 'calendar' && $_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['note_save'])) {
+    $s = (string)($_POST['note_start'] ?? '');
+    $e = (string)($_POST['note_end'] ?? '');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $s)) $s = date('Y-m-d');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $e) || $e < $s) $e = $s;
+    $type = (string)($_POST['note_type'] ?? 'custom');
+    if (!isset($NOTE_TYPES[$type])) $type = 'custom';
+    $label = trim((string)($_POST['note_label'] ?? ''));
+    $notes = trim((string)($_POST['note_text'] ?? ''));
+    if (mb_strlen($label) > 60) $label = mb_substr($label, 0, 60);
+    if (mb_strlen($notes) > 500) $notes = mb_substr($notes, 0, 500);
+    if ($type === 'custom' && $label === '') {
+        header('Location: ?p=calendar&note=0&m=' . substr($s, 0, 7));
+        exit;
+    }
+    $ins = $pdo->prepare('INSERT INTO calendar_notes (start_date, end_date, type, label, notes, created_at) VALUES (?,?,?,?,?,?)');
+    $ins->execute([$s, $e, $type, $label, $notes, time()]);
+    header('Location: ?p=calendar&note=1&m=' . substr($s, 0, 7));
+    exit;
+}
+if ($p === 'calendar' && $_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['note_del'])) {
+    $nid = (int)($_POST['note_id'] ?? 0);
+    $nm = (string)($_POST['note_m'] ?? date('Y-m'));
+    if (!preg_match('/^\d{4}-\d{2}$/', $nm)) $nm = date('Y-m');
+    if ($nid > 0) $pdo->prepare('DELETE FROM calendar_notes WHERE id = ?')->execute([$nid]);
+    header('Location: ?p=calendar&note=1&m=' . $nm);
+    exit;
+}
 if ($p === 'calendar' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $d = trim($_POST['date'] ?? date('Y-m-d'));
     $sport = trim($_POST['sport'] ?? 'ride');
@@ -842,6 +881,56 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') trqSheet(fal
   </div>
 </dialog>
 
+<!-- Modal Note calendrier -->
+<dialog class="dialog" id="modal-note"
+        onpointerdown="this.dataset.backdropPress = event.target === this"
+        onclick="if (event.target === this && this.dataset.backdropPress === 'true') this.close()">
+  <div class="sm:max-w-md w-full">
+    <header class="flex items-center justify-between pb-3 border-b mb-4">
+      <div>
+        <h3 class="text-base font-semibold"><?= t('Ajouter une note au calendrier') ?></h3>
+        <p class="text-xs text-muted-foreground"><?= t('Congé, blessure, repos…') ?></p>
+      </div>
+      <button type="button" class="btn" data-variant="ghost" data-size="icon" onclick="this.closest('dialog').close()">✕</button>
+    </header>
+    <section>
+      <form method="post" action="?p=calendar" class="space-y-4">
+        <input type="hidden" name="note_save" value="1">
+        <div class="grid grid-cols-2 gap-3">
+          <div class="field">
+            <label class="text-xs font-medium"><?= t('Du') ?></label>
+            <input class="input text-sm" type="date" name="note_start" id="note-start" value="<?= date('Y-m-d') ?>" required>
+          </div>
+          <div class="field">
+            <label class="text-xs font-medium"><?= t('Au') ?></label>
+            <input class="input text-sm" type="date" name="note_end" id="note-end" value="<?= date('Y-m-d') ?>" required>
+          </div>
+        </div>
+        <div class="field">
+          <label class="text-xs font-medium"><?= t('Type') ?></label>
+          <select class="select text-sm" name="note_type" onchange="document.getElementById('noteLabelWrap').classList.toggle('hidden', this.value !== 'custom')">
+            <?php foreach ($NOTE_TYPES as $nKey => $nT): ?>
+              <option value="<?= h($nKey) ?>"><?= $nT[0] ?> <?= h(t($nT[1])) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div class="field hidden" id="noteLabelWrap">
+          <label class="text-xs font-medium"><?= t('Libellé personnalisé') ?></label>
+          <input class="input text-sm" type="text" name="note_label" maxlength="60" placeholder="<?= h(t('Ex : stage, vacances, examen…')) ?>">
+        </div>
+        <div class="field">
+          <label class="text-xs font-medium"><?= t('Détail (facultatif)') ?></label>
+          <textarea class="textarea text-sm" name="note_text" rows="2" maxlength="500" placeholder="<?= h(t('Précisions…')) ?>"></textarea>
+        </div>
+        <footer class="flex items-center justify-end gap-2 pt-2 border-t">
+          <button class="btn" data-variant="outline" type="button" onclick="this.closest('dialog').close()"><?= t('Annuler') ?></button>
+          <button class="btn" type="submit"><?= t('Ajouter au calendrier') ?></button>
+        </footer>
+      </form>
+    </section>
+  </div>
+</dialog>
+
 <script>
 function openWorkoutModal(dateStr = '') {
     if (dateStr) {
@@ -849,6 +938,13 @@ function openWorkoutModal(dateStr = '') {
         if (inp) inp.value = dateStr;
     }
     const d = document.getElementById('modal-workout');
+    if (d) d.showModal();
+}
+
+function openNoteModal(dateStr = '') {
+    const s = document.getElementById('note-start'), e = document.getElementById('note-end');
+    if (dateStr && s) { s.value = dateStr; if (e) e.value = dateStr; }
+    const d = document.getElementById('modal-note');
     if (d) d.showModal();
 }
 
@@ -4621,6 +4717,27 @@ if ($p === 'calendar') {
     $byDayM = $loadRange($monthStart->format('Y-m-d'), $monthEnd->format('Y-m-d'));
     $byDayW = $loadRange($weekStart->format('Y-m-d'), $weekEnd->format('Y-m-d'));
 
+    /* Notes du calendrier : on charge tout ce qui chevauche min/max (mois, semaine) puis on expande jour par jour */
+    $noteByDay = [];
+    try {
+        $nLo = min($weekStart->format('Y-m-d'), $monthStart->format('Y-m-d'));
+        $nHi = max($weekEnd->format('Y-m-d'), $monthEnd->format('Y-m-d'));
+        $st = $pdo->prepare('SELECT * FROM calendar_notes WHERE end_date >= ? AND start_date <= ? ORDER BY created_at ASC LIMIT 200');
+        $st->execute([$nLo, $nHi]);
+        $nGuard = 0;
+        foreach ($st->fetchAll() as $nr) {
+            $nr['sm'] = substr((string)$nr['start_date'], 0, 7);
+            $nS = max((string)$nr['start_date'], $nLo);
+            $nE = min((string)$nr['end_date'], $nHi);
+            for ($nd = $nS; $nd <= $nE; $nd = date('Y-m-d', strtotime($nd . ' +1 day'))) {
+                if ($nGuard++ > 400) break 2;
+                $noteByDay[$nd][] = $nr;
+            }
+        }
+    } catch (Throwable $e) {
+        $noteByDay = [];
+    }
+
     $cmpByPlan = []; $cmpByAct = []; $manualRows = []; $reserved = plan_reserved_ids();
     foreach ($pdo->query("SELECT activity_id FROM planned_workouts WHERE activity_id IS NOT NULL AND activity_id <> ''")->fetchAll(PDO::FETCH_COLUMN) as $mid) {
         $ms = $pdo->prepare('SELECT ' . ACT_COLS . ' FROM activities WHERE id=?'); $ms->execute([$mid]); if ($mr = $ms->fetch()) $manualRows[$mid] = $mr;
@@ -4710,6 +4827,23 @@ if ($p === 'calendar') {
             . '</div>';
     };
 
+    $renderNote = function (array $nr) use ($NOTE_TYPES): string {
+        $nt = $NOTE_TYPES[$nr['type']] ?? $NOTE_TYPES['custom'];
+        $isCustom = $nr['type'] === 'custom' && $nr['label'] !== '' && $nr['label'] !== null;
+        $lbl = $isCustom ? $nr['label'] : t($nt[1]);
+        $notes = trim((string)($nr['notes'] ?? ''));
+        $title = htmlspecialchars($isCustom ? $nr['label'] : $nt[1], ENT_QUOTES | ENT_HTML5);
+        if ($notes !== '') $title .= ' — ' . htmlspecialchars($notes, ENT_QUOTES | ENT_HTML5);
+        $confirm = addslashes(t('Supprimer cette note ?'));
+        return '<form method="post" action="?p=calendar" class="inline-flex">'
+            . '<input type="hidden" name="note_del" value="1">'
+            . '<input type="hidden" name="note_id" value="' . (int)$nr['id'] . '">'
+            . '<input type="hidden" name="note_m" value="' . htmlspecialchars((string)$nr['sm'], ENT_QUOTES | ENT_HTML5) . '">'
+            . '<button type="submit" class="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium max-w-full overflow-hidden text-ellipsis whitespace-nowrap ' . $nt[2] . ' transition hover:opacity-80" title="' . $title . '" onclick="return confirm(\'' . $confirm . '\')">'
+            . '<span aria-hidden="true">' . $nt[0] . '</span><span class="truncate">' . htmlspecialchars((string)$lbl, ENT_QUOTES | ENT_HTML5) . '</span>'
+            . '</button></form>';
+    };
+
     $dayTssOf = function (array $dayData): float {
         $t = 0.0;
         foreach ($dayData['acts'] ?? [] as $ac) $t += (float)($ac['tss'] ?? 0);
@@ -4735,8 +4869,19 @@ if ($p === 'calendar') {
             <span class="text-xs font-semibold text-muted-foreground">· sem. <?= h($weekStart->format('W')) ?></span>
           </div>
         </div>
-        <button class="btn" data-size="sm" onclick="openWorkoutModal()">＋ Planifier</button>
+        <div class="flex items-center gap-2">
+          <button class="btn" data-size="sm" onclick="openNoteModal()">📝 Note</button>
+          <button class="btn" data-size="sm" onclick="openWorkoutModal()">＋ Planifier</button>
+        </div>
       </div>
+
+      <?php if (isset($_GET['note'])): ?>
+        <?php if ($_GET['note'] === '1'): ?>
+          <div class="alert"><h3><?= t('Note ajoutée au calendrier.') ?></h3></div>
+        <?php else: ?>
+          <div class="alert" data-variant="destructive"><h3><?= t('La note n’a pas pu être enregistrée.') ?></h3><p class="text-xs text-muted-foreground"><?= t('Un type personnalisé doit avoir un libellé.') ?></p></div>
+        <?php endif; ?>
+      <?php endif; ?>
 
       <?php /* ===================== VUE SEMAINE (mobile) ===================== */ ?>
       <div class="md:hidden space-y-3">
@@ -4762,6 +4907,7 @@ if ($p === 'calendar') {
             </header>
             <section class="p-3 space-y-2">
               <?php if (!empty($dayData['well'])) echo $renderWell($dayData['well']); ?>
+              <?php foreach ($noteByDay[$cDate] ?? [] as $nt) echo $renderNote($nt); ?>
               <?php if (empty($dayData['acts']) && empty($dayData['planned'])): ?>
                 <p class="py-3 text-center text-sm text-muted-foreground">Aucune séance</p>
               <?php endif; ?>
@@ -4835,6 +4981,7 @@ if ($p === 'calendar') {
                 <?php if (!empty($dayData['well'])) echo $renderWell($dayData['well']); ?>
 
                 <div class="flex-1 space-y-2 overflow-y-auto max-h-[320px]">
+                  <?php foreach ($noteByDay[$wd['date']] ?? [] as $nt) echo $renderNote($nt); ?>
                   <?php foreach ($dayData['planned'] ?? [] as $pl) echo $renderPlan($pl, false); ?>
                   <?php foreach ($dayData['acts'] ?? [] as $ac) echo $renderChip($ac, false); ?>
                 </div>

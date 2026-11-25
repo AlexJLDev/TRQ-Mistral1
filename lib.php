@@ -111,6 +111,16 @@ function db(): PDO {
         );
         CREATE INDEX IF NOT EXISTS idx_plan_date ON planned_workouts(date);
 
+        CREATE TABLE IF NOT EXISTS calendar_notes(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            start_date TEXT,
+            end_date TEXT,
+            type TEXT,
+            label TEXT,
+            notes TEXT,
+            created_at INTEGER
+        );
+
         CREATE TABLE IF NOT EXISTS workouts(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT, sport TEXT DEFAULT 'ride', mode TEXT DEFAULT 'power', unit TEXT DEFAULT 'pct',
