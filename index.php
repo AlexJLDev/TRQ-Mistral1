@@ -1248,6 +1248,30 @@ if ($p === 'dashboard') {
             $npText = trim((string)($nextPlan['icu_text'] ?? ''));
             if ($npText === '') $npText = coach_plan_text((string)$nextPlan['structure'], ($nextPlan['tss_type'] ?? '') === 'hrtss' ? 'hr' : 'power');
         }
+        /* profil visuel de la séance : aplatissement du JSON structure en segments (réps × steps développés) */
+        $npSegs = [];
+        $npTotal = 0;
+        $npKindLbl = ['warmup' => 'Échauffement', 'work' => 'Effort', 'rest' => 'Récupération', 'cooldown' => 'Retour au calme', 'steady' => 'Palier'];
+        $npUnit = ($nextPlan['tss_type'] ?? '') === 'hrtss' ? '% LTHR' : '% FTP';
+        if ($npStruct) {
+            $npFlat = null;
+            $npFlat = function (array $blocks) use (&$npFlat, &$npSegs, &$npTotal): void {
+                foreach ($blocks as $b) {
+                    $b = (array)$b;
+                    if (isset($b['steps']) && is_array($b['steps'])) {
+                        for ($i = 0; $i < max(1, (int)($b['reps'] ?? 1)); $i++) $npFlat(array_map(fn($s) => (array)$s, $b['steps']));
+                        continue;
+                    }
+                    $dur = max(1, (int)($b['dur'] ?? 60));
+                    $lo = (float)($b['lo'] ?? 100);
+                    $hi = (float)($b['hi'] ?? $lo);
+                    $npSegs[] = ['dur' => $dur, 'lo' => min($lo, $hi), 'hi' => max($lo, $hi), 'kind' => (string)($b['kind'] ?? 'work')];
+                    $npTotal += $dur;
+                }
+            };
+            $npFlat($npStruct);
+        }
+        $npCol = fn(float $p): string => $p < 55 ? '#64748b' : ($p < 75 ? '#10b981' : ($p < 90 ? '#0ea5e9' : ($p < 105 ? '#f59e0b' : '#ef4444')));
     ?>
     <div class="card" id="nextPlanCard">
       <header class="p-4 border-b flex flex-wrap items-center justify-between gap-2">
@@ -1270,7 +1294,23 @@ if ($p === 'dashboard') {
           <?php if (!empty($nextPlan['distance'])): ?><span class="tabular-nums">📏 <?= n((float)$nextPlan['distance'] / 1000) ?> km</span><?php endif; ?>
           <?php if ($npStruct): ?><span class="text-muted-foreground"><?= ($nextPlan['tss_type'] ?? '') === 'hrtss' ? 'cibles en % LTHR' : 'cibles en % FTP' ?></span><?php endif; ?>
         </div>
-        <?php if ($npStruct): ?>
+        <?php if ($npStruct && $npTotal > 0): ?>
+        <div class="space-y-2">
+          <div class="flex items-end gap-[2px] h-28 sm:h-36 w-full rounded-lg border bg-muted/30 p-2">
+            <?php foreach ($npSegs as $s): $npC1 = $npCol($s['lo']); $npC2 = $npCol($s['hi']); ?>
+            <div class="min-w-[3px] rounded-t-[3px]"
+                 style="width:<?= round($s['dur'] / $npTotal * 100, 3) ?>%;height:<?= max(10, min(100, $s['hi'])) ?>%;background:linear-gradient(to top, <?= $npC1 ?>, <?= $npC2 ?>)"
+                 title="<?= h(($npKindLbl[$s['kind']] ?? $s['kind']) . ' — ' . fmt_dur($s['dur']) . ' @ ' . (abs($s['hi'] - $s['lo']) < 0.5 ? round($s['lo']) : round($s['lo']) . '–' . round($s['hi'])) . ' ' . $npUnit) ?>"></div>
+            <?php endforeach; ?>
+          </div>
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+            <span class="inline-flex items-center gap-1"><span class="inline-block size-2 rounded-sm" style="background:#64748b"></span>&lt; 55 <?= $npUnit ?> — récup.</span>
+            <span class="inline-flex items-center gap-1"><span class="inline-block size-2 rounded-sm" style="background:#10b981"></span>55–75 — endurance</span>
+            <span class="inline-flex items-center gap-1"><span class="inline-block size-2 rounded-sm" style="background:#0ea5e9"></span>75–90 — tempo</span>
+            <span class="inline-flex items-center gap-1"><span class="inline-block size-2 rounded-sm" style="background:#f59e0b"></span>90–105 — seuil</span>
+            <span class="inline-flex items-center gap-1"><span class="inline-block size-2 rounded-sm" style="background:#ef4444"></span>&gt; 105 — PMA</span>
+          </div>
+        </div>
         <details class="rounded-lg border p-3">
           <summary class="cursor-pointer text-sm font-medium">🧩 Séance structurée — <?= count($npStruct) ?> bloc(s) · détail des intervalles</summary>
           <pre class="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground"><?= h($npText) ?></pre>
