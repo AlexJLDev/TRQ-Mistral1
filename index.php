@@ -1240,7 +1240,7 @@ if ($p === 'dashboard') {
 
     <?php /* Mon prochain entraînement (style TrainingPeaks) */
     $nextPlan = null;
-    try { $nextPlan = $pdo->query("SELECT * FROM planned_workouts WHERE completed=0 AND substr(date,1,10) >= date('now') ORDER BY substr(date,1,10), id LIMIT 1")->fetch() ?: null; } catch (Throwable $e) {}
+    try { $nextPlan = $pdo->query("SELECT * FROM planned_workouts WHERE completed=0 AND (activity_id IS NULL OR activity_id='') AND substr(date,1,10) >= date('now') ORDER BY substr(date,1,10), id LIMIT 1")->fetch() ?: null; } catch (Throwable $e) {}
     if ($nextPlan):
         $npDay  = substr((string)$nextPlan['date'], 0, 10);
         $npDays = (int)floor((strtotime($npDay) - strtotime(date('Y-m-d'))) / 86400);
@@ -6177,10 +6177,18 @@ if ($p === 'progress') {
     $feelLb = ['top' => 'Au top 💪', 'bien' => 'Bien 🙂', 'normal' => 'Normal 😐', 'dur' => 'Dur 😕', 'epuise' => 'Épuisé 🥵'];
     $gs = progress_goal_status();
 
-    /* Volume annuel : heures et km par sport — 1 an glissant + détail mensuel */
+    /* Volume annuel : heures et km par sport — année civile (1er janvier → 31 décembre), année sélectionnable */
+    $volYr = (int)($_GET['voly'] ?? date('Y'));
+    $volYrMin = (int)$pdo->query("SELECT MIN(substr(date,1,4)) FROM activities WHERE date IS NOT NULL AND date <> ''")->fetchColumn() ?: (int)date('Y');
+    if ($volYrMin < 2000 || $volYrMin > (int)date('Y')) $volYrMin = (int)date('Y');
+    if ($volYr < $volYrMin || $volYr > (int)date('Y')) $volYr = (int)date('Y');
+    $volYears = [];
+    for ($y = $volYrMin; $y <= (int)date('Y'); $y++) $volYears[] = $y;
     $volYear = [];
     $volMonths = [];
-    foreach ($pdo->query("SELECT substr(date,1,10) d, sport, duration, distance, tss FROM activities WHERE substr(date,1,10) >= date('now','-364 days')")->fetchAll() as $r) {
+    $stVol = $pdo->prepare("SELECT substr(date,1,10) d, sport, duration, distance, tss FROM activities WHERE substr(date,1,10) >= ? AND substr(date,1,10) <= ?");
+    $stVol->execute([$volYr . '-01-01', $volYr . '-12-31']);
+    foreach ($stVol->fetchAll() as $r) {
         $sp = $r['sport'];
         $m = substr($r['d'], 0, 7);
         $h = (int)$r['duration'] / 3600;
@@ -6198,9 +6206,9 @@ if ($p === 'progress') {
     $volSports = ['ride' => 'Vélo', 'run' => 'Course', 'swim' => 'Natation', 'other' => 'Autre'];
     $volColors = ['ride' => '#0284c7', 'run' => '#10b981', 'swim' => '#06b6d4', 'other' => '#8b5cf6'];
     $volMsFr = [1 => 'janv.', 2 => 'févr.', 3 => 'mars', 4 => 'avr.', 5 => 'mai', 6 => 'juin', 7 => 'juil.', 8 => 'août', 9 => 'sept.', 10 => 'oct.', 11 => 'nov.', 12 => 'déc.'];
-    $volRows = [];   /* [label, h, km, n, per-sport] — 12 mois glissants, le plus ancien d'abord */
-    for ($i = 11; $i >= 0; $i--) {
-        $mk = date('Y-m', strtotime(date('Y-m-01') . " -$i months"));
+    $volRows = [];   /* [label, h, km, n, per-sport] — 12 mois de l'année civilé, janvier → décembre */
+    for ($m = 1; $m <= 12; $m++) {
+        $mk = sprintf('%04d-%02d', $volYr, $m);
         $rowS = $volMonths[$mk] ?? [];
         $th = 0.0;
         $tkm = 0.0;
@@ -6317,30 +6325,33 @@ if ($p === 'progress') {
       </div>
 
       <!-- Volume annuel -->
-      <?php if ($volYear): ?>
       <div class="card" id="volCard">
-        <header class="p-4 border-b">
-          <h3 class="text-base font-semibold">Volume annuel — heures &amp; kilomètres</h3>
-          <p class="text-xs text-muted-foreground">12 derniers mois glissants, répartition par sport — camemberts + mois par mois</p>
+        <header class="p-4 border-b flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h3 class="text-base font-semibold">Volume annuel — heures &amp; kilomètres</h3>
+            <p class="text-xs text-muted-foreground">Année <?= $volYr ?> · du 1er janvier au 31 décembre, répartition par sport — camemberts + mois par mois</p>
+          </div>
+          <label class="flex items-center gap-2 text-xs text-muted-foreground">Année
+            <select class="input h-8 w-24 text-sm" onchange="if (this.value) location.href = '?p=progress&voly=' + this.value + '#volCard'">
+              <?php foreach ($volYears as $vy2): ?>
+                <option value="<?= $vy2 ?>"<?= $vy2 === $volYr ? ' selected' : '' ?>><?= $vy2 ?></option>
+              <?php endforeach; ?>
+            </select>
+          </label>
         </header>
         <section class="p-4 space-y-4">
           <?php
           $volTh = array_sum(array_column($volYear, 'h'));
           $volTkm = array_sum(array_column($volYear, 'km'));
           $volTn = array_sum(array_column($volYear, 'n'));
-          $volTtss = array_sum(array_column($volYear, 'tss'));
-          stat_card('Temps 1 an', fmt_dur((int)round($volTh * 3600)), $volTn . ' séance(s)');
-          stat_card('Distance 1 an', n($volTkm, 0) . ' km', 'tous sports');
-          stat_card('Charge 1 an', n($volTtss, 0) . ' TSS', '≈ ' . n($volTtss / 365, 1) . ' TSS / jour');
-          stat_card('Sports pratiqués', (string)count(array_filter($volYear, fn ($s) => $s['n'] > 0)), 'sur les 12 mois');
           ?>
           <div class="grid sm:grid-cols-2 gap-4">
             <div class="rounded-lg border p-3">
-              <p class="mb-2 text-xs font-medium text-muted-foreground">Heures par sport (1 an)</p>
+              <p class="mb-2 text-xs font-medium text-muted-foreground">Heures par sport (<?= $volYr ?>)</p>
               <div class="h-56 w-full"><canvas id="volHours"></canvas></div>
             </div>
             <div class="rounded-lg border p-3">
-              <p class="mb-2 text-xs font-medium text-muted-foreground">Kilomètres par sport (1 an)</p>
+              <p class="mb-2 text-xs font-medium text-muted-foreground">Kilomètres par sport (<?= $volYr ?>)</p>
               <div class="h-56 w-full"><canvas id="volKm"></canvas></div>
             </div>
           </div>
@@ -6371,7 +6382,7 @@ if ($p === 'progress') {
               </tbody>
               <tfoot>
                 <tr class="bg-muted/40 border-t font-semibold">
-                  <td>Total 1 an</td>
+                  <td>Total <?= $volYr ?></td>
                   <td class="tabular-nums"><?= $volTn ?></td>
                   <td class="tabular-nums"><?= n($volTh, 0) ?> h</td>
                   <?php foreach (['ride', 'run', 'swim', 'other'] as $vk): $vy = $volYear[$vk] ?? null; ?>
@@ -6386,13 +6397,13 @@ if ($p === 'progress') {
         (function () {
           const lb = <?= json_encode($volCLbl, JSON_UNESCAPED_UNICODE) ?>;
           const cc = <?= json_encode($volCCol) ?>;
+          if (!lb.length) return;
           const opt = { maintainAspectRatio: false, cutout: '55%', plugins: { legend: { position: 'bottom' } } };
           new Chart('volHours', { type: 'doughnut', data: { labels: lb, datasets: [{ data: <?= json_encode($volCH) ?>, backgroundColor: cc, borderWidth: 0 }] }, options: opt });
           new Chart('volKm', { type: 'doughnut', data: { labels: lb, datasets: [{ data: <?= json_encode($volCK) ?>, backgroundColor: cc, borderWidth: 0 }] }, options: opt });
         })();
         </script>
       </div>
-      <?php endif; ?>
 
       <!-- Efficience TSS/RPE -->
       <div class="card" id="effCard">
