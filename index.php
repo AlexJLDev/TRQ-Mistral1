@@ -6176,6 +6176,52 @@ if ($p === 'progress') {
     $dfmt = fn(?string $d): string => $d ? date('d/m/y', strtotime($d)) : '–';
     $feelLb = ['top' => 'Au top 💪', 'bien' => 'Bien 🙂', 'normal' => 'Normal 😐', 'dur' => 'Dur 😕', 'epuise' => 'Épuisé 🥵'];
     $gs = progress_goal_status();
+
+    /* Volume annuel : heures et km par sport — 1 an glissant + détail mensuel */
+    $volYear = [];
+    $volMonths = [];
+    foreach ($pdo->query("SELECT substr(date,1,10) d, sport, duration, distance, tss FROM activities WHERE substr(date,1,10) >= date('now','-364 days')")->fetchAll() as $r) {
+        $sp = $r['sport'];
+        $m = substr($r['d'], 0, 7);
+        $h = (int)$r['duration'] / 3600;
+        $km = (float)$r['distance'] / 1000;
+        if (!isset($volYear[$sp])) $volYear[$sp] = ['h' => 0.0, 'km' => 0.0, 'tss' => 0.0, 'n' => 0];
+        $volYear[$sp]['h'] += $h;
+        $volYear[$sp]['km'] += $km;
+        $volYear[$sp]['tss'] += (float)$r['tss'];
+        $volYear[$sp]['n']++;
+        if (!isset($volMonths[$m][$sp])) $volMonths[$m][$sp] = ['h' => 0.0, 'km' => 0.0, 'n' => 0];
+        $volMonths[$m][$sp]['h'] += $h;
+        $volMonths[$m][$sp]['km'] += $km;
+        $volMonths[$m][$sp]['n']++;
+    }
+    $volSports = ['ride' => 'Vélo', 'run' => 'Course', 'swim' => 'Natation', 'other' => 'Autre'];
+    $volColors = ['ride' => '#0284c7', 'run' => '#10b981', 'swim' => '#06b6d4', 'other' => '#8b5cf6'];
+    $volMsFr = [1 => 'janv.', 2 => 'févr.', 3 => 'mars', 4 => 'avr.', 5 => 'mai', 6 => 'juin', 7 => 'juil.', 8 => 'août', 9 => 'sept.', 10 => 'oct.', 11 => 'nov.', 12 => 'déc.'];
+    $volRows = [];   /* [label, h, km, n, per-sport] — 12 mois glissants, le plus ancien d'abord */
+    for ($i = 11; $i >= 0; $i--) {
+        $mk = date('Y-m', strtotime(date('Y-m-01') . " -$i months"));
+        $rowS = $volMonths[$mk] ?? [];
+        $th = 0.0;
+        $tkm = 0.0;
+        $tn = 0;
+        foreach ($rowS as $s) { $th += $s['h']; $tkm += $s['km']; $tn += $s['n']; }
+        $volRows[] = ['m' => $mk, 'lbl' => $volMsFr[(int)substr($mk, 5, 2)] . ' ' . substr($mk, 2, 2), 'h' => $th, 'km' => $tkm, 'n' => $tn, 'sp' => $rowS];
+    }
+    /* séries des camemberts : sports réellement pratiqués */
+    $volCLbl = [];
+    $volCCol = [];
+    $volCH = [];
+    $volCK = [];
+    foreach ($volSports as $vk => $vl) {
+        $vy = $volYear[$vk] ?? null;
+        if ($vy && ($vy['h'] > 0.01 || $vy['km'] > 0.01)) {
+            $volCLbl[] = $vl;
+            $volCCol[] = $volColors[$vk];
+            $volCH[] = round($vy['h'], 1);
+            $volCK[] = round($vy['km']);
+        }
+    }
     ?>
     <div class="space-y-6">
       <div>
@@ -6269,6 +6315,84 @@ if ($p === 'progress') {
           <p class="text-xs text-muted-foreground">Le RPE moyen et les ressentis se remplissent depuis le badge en haut de chaque séance — plus de séances notées, plus le rapport est précis.</p>
         </section>
       </div>
+
+      <!-- Volume annuel -->
+      <?php if ($volYear): ?>
+      <div class="card" id="volCard">
+        <header class="p-4 border-b">
+          <h3 class="text-base font-semibold">Volume annuel — heures &amp; kilomètres</h3>
+          <p class="text-xs text-muted-foreground">12 derniers mois glissants, répartition par sport — camemberts + mois par mois</p>
+        </header>
+        <section class="p-4 space-y-4">
+          <?php
+          $volTh = array_sum(array_column($volYear, 'h'));
+          $volTkm = array_sum(array_column($volYear, 'km'));
+          $volTn = array_sum(array_column($volYear, 'n'));
+          $volTtss = array_sum(array_column($volYear, 'tss'));
+          stat_card('Temps 1 an', fmt_dur((int)round($volTh * 3600)), $volTn . ' séance(s)');
+          stat_card('Distance 1 an', n($volTkm, 0) . ' km', 'tous sports');
+          stat_card('Charge 1 an', n($volTtss, 0) . ' TSS', '≈ ' . n($volTtss / 365, 1) . ' TSS / jour');
+          stat_card('Sports pratiqués', (string)count(array_filter($volYear, fn ($s) => $s['n'] > 0)), 'sur les 12 mois');
+          ?>
+          <div class="grid sm:grid-cols-2 gap-4">
+            <div class="rounded-lg border p-3">
+              <p class="mb-2 text-xs font-medium text-muted-foreground">Heures par sport (1 an)</p>
+              <div class="h-56 w-full"><canvas id="volHours"></canvas></div>
+            </div>
+            <div class="rounded-lg border p-3">
+              <p class="mb-2 text-xs font-medium text-muted-foreground">Kilomètres par sport (1 an)</p>
+              <div class="h-56 w-full"><canvas id="volKm"></canvas></div>
+            </div>
+          </div>
+          <div class="table-container">
+            <table class="table text-sm">
+              <thead>
+                <tr>
+                  <th>Mois</th>
+                  <th>Séances</th>
+                  <th>Temps</th>
+                  <th class="text-sky-600 dark:text-sky-400">Vélo</th>
+                  <th class="text-emerald-600 dark:text-emerald-400">Course</th>
+                  <th class="text-cyan-600 dark:text-cyan-400">Natation</th>
+                  <th class="text-purple-600 dark:text-purple-400">Autre</th>
+                </tr>
+              </thead>
+              <tbody>
+                <?php foreach (array_reverse($volRows) as $vr): ?>
+                <tr class="<?= $vr['m'] === date('Y-m') ? 'bg-muted/40 font-semibold' : '' ?><?= $vr['n'] === 0 ? ' opacity-50' : '' ?>">
+                  <td class="font-medium"><?= h(ucfirst($vr['lbl'])) ?></td>
+                  <td class="tabular-nums"><?= $vr['n'] ?: '–' ?></td>
+                  <td class="tabular-nums font-semibold"><?= $vr['h'] > 0 ? n($vr['h'], 1) . ' h' : '–' ?></td>
+                  <?php foreach (['ride', 'run', 'swim', 'other'] as $vk): $vs = $vr['sp'][$vk] ?? null; ?>
+                    <td class="tabular-nums text-xs"><?= $vs ? n($vs['h'], 1) . ' h · ' . n($vs['km'], ($vk === 'swim' && $vs['km'] < 100) ? 1 : 0) . ' km' : '–' ?></td>
+                  <?php endforeach; ?>
+                </tr>
+                <?php endforeach; ?>
+              </tbody>
+              <tfoot>
+                <tr class="bg-muted/40 border-t font-semibold">
+                  <td>Total 1 an</td>
+                  <td class="tabular-nums"><?= $volTn ?></td>
+                  <td class="tabular-nums"><?= n($volTh, 0) ?> h</td>
+                  <?php foreach (['ride', 'run', 'swim', 'other'] as $vk): $vy = $volYear[$vk] ?? null; ?>
+                    <td class="tabular-nums text-xs"><?= $vy && $vy['n'] > 0 ? n($vy['h'], 0) . ' h · ' . n($vy['km'], 0) . ' km' : '–' ?></td>
+                  <?php endforeach; ?>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </section>
+        <script>
+        (function () {
+          const lb = <?= json_encode($volCLbl, JSON_UNESCAPED_UNICODE) ?>;
+          const cc = <?= json_encode($volCCol) ?>;
+          const opt = { maintainAspectRatio: false, cutout: '55%', plugins: { legend: { position: 'bottom' } } };
+          new Chart('volHours', { type: 'doughnut', data: { labels: lb, datasets: [{ data: <?= json_encode($volCH) ?>, backgroundColor: cc, borderWidth: 0 }] }, options: opt });
+          new Chart('volKm', { type: 'doughnut', data: { labels: lb, datasets: [{ data: <?= json_encode($volCK) ?>, backgroundColor: cc, borderWidth: 0 }] }, options: opt });
+        })();
+        </script>
+      </div>
+      <?php endif; ?>
 
       <!-- Efficience TSS/RPE -->
       <div class="card" id="effCard">
