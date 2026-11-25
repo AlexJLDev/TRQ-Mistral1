@@ -4807,6 +4807,12 @@ if ($p === 'calendar') {
     $byDayM = $loadRange($monthStart->format('Y-m-d'), $monthEnd->format('Y-m-d'));
     $byDayW = $loadRange($weekStart->format('Y-m-d'), $weekEnd->format('Y-m-d'));
 
+    /* PMC (CTL/ATL/TSB par jour, jusqu'à aujourd'hui) pour le rail résumé semaine */
+    $pmAll = pmc(null);
+    /* Banque de séances structurées (workouts) pour le drag & drop vers les jours */
+    $calLib = [];
+    try { $calLib = $pdo->query('SELECT id, name, sport, mode, profile, duration, tss FROM workouts ORDER BY updated_at DESC LIMIT 60')->fetchAll(); } catch (Throwable $e) {}
+
     /* Notes du calendrier : on charge tout ce qui chevauche min/max (mois, semaine) puis on expande jour par jour */
     $noteByDay = [];
     try {
@@ -4882,7 +4888,9 @@ if ($p === 'calendar') {
 
     $renderPlan = function (array $pl, bool $big) use ($cmpByPlan, $lvlChip): string {
         $hasStruct = !empty($pl['profile']);
-        $out = '<div class="group/pl relative p-2 rounded-lg border border-dashed border-muted-foreground/40 bg-muted/20 ' . ($big ? 'text-sm' : 'text-xs') . ' leading-tight">';
+        $canDrag = empty($pl['activity_id'] ?? null) && !isset($cmpByPlan[$pl['id']]);   // déjà réalisée = non déplaçable
+        $out = '<div class="group/pl relative p-2 rounded-lg border border-dashed border-muted-foreground/40 bg-muted/20 ' . ($big ? 'text-sm' : 'text-xs') . ' leading-tight' . ($canDrag ? ' draggable-plan cursor-grab active:cursor-grabbing' : '') . '"'
+             . ($canDrag ? ' data-plan-id="' . (int)$pl['id'] . '" title="Glisser vers un autre jour pour déplacer la séance"' : '') . '>';
         if (!empty($pl['icu_text']) && cfg('api_key')) {
             $sent = !empty($pl['icu_event_id']);
             $out .= '<button type="button" class="absolute right-6 top-1 flex size-5 items-center justify-center rounded text-xs hover:bg-muted ' . ($sent ? 'text-emerald-600' : 'hidden text-muted-foreground group-hover/pl:flex') . '" onclick="pushPlanned(' . (int)$pl['id'] . ')" title="' . ($sent ? 'Envoyée à intervals.icu (cliquer pour mettre à jour)' : 'Envoyer à intervals.icu') . '" aria-label="Envoyer à intervals.icu">' . ($sent ? '✓' : '↗') . '</button>';
@@ -4973,6 +4981,25 @@ if ($p === 'calendar') {
         <?php endif; ?>
       <?php endif; ?>
 
+      <?php if ($calLib): ?>
+      <details class="rounded-xl border bg-muted/30" open>
+        <summary class="cursor-pointer select-none px-3.5 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">🏋️ Banque de séances structurées <span class="text-primary"><?= count($calLib) ?></span> — glisse une séance sur un jour pour la planifier</summary>
+        <div class="flex flex-wrap gap-2 px-3.5 pb-3">
+          <?php foreach ($calLib as $cw): $cwProfile = json_decode((string)$cw['profile'], true) ?: []; ?>
+          <div class="draggable-wo max-w-56 cursor-grab rounded-lg border bg-background p-2 text-xs shadow-2xs transition hover:border-foreground/30" data-wo-id="<?= (int)$cw['id'] ?>"
+               onclick="if (!window.__calJustDragged) location.href='?p=workouts&id=<?= (int)$cw['id'] ?>'"
+               title="Cliquer : ouvrir dans le builder · Glisser : planifier sur un jour">
+            <div class="truncate font-semibold">🧩 <?= h((string)$cw['name']) ?></div>
+            <?php if ($cwProfile): ?><div class="mt-1"><?= workout_mini_svg($cwProfile, ($cw['mode'] ?? '') === 'hr' ? 'hr' : 'power', 110, 20) ?></div><?php endif; ?>
+            <div class="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground tabular-nums">
+              <span>⏱ <?= fmt_dur((int)$cw['duration']) ?></span><span class="font-bold text-foreground"><?= n((float)$cw['tss']) ?> TSS</span>
+            </div>
+          </div>
+          <?php endforeach; ?>
+        </div>
+      </details>
+      <?php endif; ?>
+
       <?php /* ===================== VUE SEMAINE (mobile) ===================== */ ?>
       <div class="md:hidden space-y-3">
         <?php
@@ -4995,7 +5022,7 @@ if ($p === 'calendar') {
                 <button type="button" onclick="openWorkoutModal('<?= $cDate ?>')" class="btn" data-variant="ghost" data-size="sm" aria-label="Ajouter une séance le <?= $cDate ?>" title="Ajouter une séance">＋</button>
               </div>
             </header>
-            <section class="p-3 space-y-2">
+            <section class="p-3 space-y-2 cal-drop" data-date="<?= $cDate ?>">
               <?php if (!empty($dayData['well'])) echo $renderWell($dayData['well']); ?>
               <?php foreach ($noteByDay[$cDate] ?? [] as $nt) echo $renderNote($nt); ?>
               <?php if (empty($dayData['acts']) && empty($dayData['planned'])): ?>
@@ -5021,8 +5048,18 @@ if ($p === 'calendar') {
               elseif ($ac['sport'] === 'swim') $wt['swim'] += (float)($ac['distance'] ?? 0);
           }
           ?>
+          <?php
+          $pmWEnd = $weekEnd->format('Y-m-d') > $today ? $today : $weekEnd->format('Y-m-d');
+          $pmWRow = $pmAll[$pmWEnd] ?? null;
+          $wTssPlan = 0.0;
+          foreach ($byDayW as $dd) foreach ($dd['planned'] ?? [] as $pl) $wTssPlan += (float)($pl['tss'] ?? 0);
+          ?>
           <div class="grid grid-cols-2 gap-3 text-sm">
             <div><p class="text-xs text-muted-foreground">Volume total</p><p class="font-bold tabular-nums"><?= fmt_dur($wt['dur']) ?></p></div>
+            <?php if ($pmWRow): ?>
+            <div><p class="text-xs text-muted-foreground">Forme / Fraîcheur (PMC)</p><p class="font-bold tabular-nums"><?= n($pmWRow['ctl'], 1) ?> · <?= sprintf('%+.0f', $pmWRow['tsb']) ?></p></div>
+            <?php endif; ?>
+            <?php if ($wTssPlan > 0): ?><div><p class="text-xs text-muted-foreground">Charge planifiée</p><p class="font-semibold text-sky-600 dark:text-sky-400 tabular-nums"><?= round($wTssPlan) ?> TSS</p></div><?php endif; ?>
             <?php if ($wt['ride'] > 0): ?><div class="text-sky-600 dark:text-sky-400"><p class="text-xs opacity-80">🚴 Vélo</p><p class="font-semibold tabular-nums"><?= round($wt['ride'] / 1000, 1) ?> km (<?= fmt_dur($wt['rideT']) ?>)</p></div><?php endif; ?>
             <?php if ($wt['run'] > 0): ?><div class="text-emerald-600 dark:text-emerald-400"><p class="text-xs opacity-80">🏃 Course</p><p class="font-semibold tabular-nums"><?= round($wt['run'] / 1000, 1) ?> km (<?= fmt_dur($wt['runT']) ?>)</p></div><?php endif; ?>
             <?php if ($wt['swim'] > 0): ?><div class="text-cyan-600 dark:text-cyan-400"><p class="text-xs opacity-80">🏊 Natation</p><p class="font-semibold tabular-nums"><?= round($wt['swim']) ?> m</p></div><?php endif; ?>
@@ -5054,12 +5091,17 @@ if ($p === 'calendar') {
                   elseif ($ac['sport'] === 'swim') $weekDistSwim += (float)($ac['distance'] ?? 0);
               }
               $weekNum = $wActs[0]['date'] ? date('W', strtotime($wActs[0]['date'])) : '';
+              /* rail résumé : charge planifiée + PMC en fin de semaine (aujourd'hui si semaine en cours) */
+              $weekTssPlan = 0.0;
+              foreach ($wActs as $wd) foreach ($wd['data']['planned'] ?? [] as $pl) $weekTssPlan += (float)($pl['tss'] ?? 0);
+              $pmEndDay = $wActs[6]['date'] > $today ? $today : $wActs[6]['date'];
+              $pmRow = $pmAll[$pmEndDay] ?? null;
           ?>
           <div class="grid grid-cols-8 divide-x divide-border border-b last:border-b-0">
             <?php foreach ($wActs as $wd):
                 $dayData = $wd['data'];
             ?>
-              <div class="p-2.5 flex flex-col justify-between min-h-[180px] <?= $wd['is_today'] ? 'bg-primary/5 ring-1 ring-primary/60 ring-inset' : ($wd['in_month'] ? 'hover:bg-muted/15' : 'bg-muted/20 opacity-50') ?> transition relative group">
+              <div class="p-2.5 flex flex-col justify-between min-h-[180px] <?= $wd['is_today'] ? 'bg-primary/5 ring-1 ring-primary/60 ring-inset' : ($wd['in_month'] ? 'hover:bg-muted/15' : 'bg-muted/20 opacity-50') ?> transition relative group cal-drop" data-date="<?= $wd['date'] ?>">
                 <div class="flex items-center justify-between mb-2">
                   <span class="<?= $wd['is_today'] ? 'grid place-items-center size-7 rounded-full bg-primary text-primary-foreground' : '' ?> text-sm font-bold tabular-nums"><?= $wd['day_num'] ?></span>
                   <div class="flex items-center gap-1.5">
@@ -5086,10 +5128,18 @@ if ($p === 'calendar') {
                 </div>
                 <div class="space-y-2 text-xs">
                   <div class="flex items-center justify-between gap-1"><span class="text-muted-foreground">Volume</span><span class="font-bold tabular-nums"><?= fmt_dur($weekDuration) ?></span></div>
+                  <?php if ($weekTssPlan > 0): ?><div class="flex items-center justify-between gap-1"><span class="text-muted-foreground">Prévu</span><span class="font-semibold text-sky-600 dark:text-sky-400 tabular-nums"><?= round($weekTssPlan) ?> TSS</span></div><?php endif; ?>
                   <?php if ($weekDistRide > 0): ?><div class="flex items-center justify-between gap-1 text-sky-600 dark:text-sky-400"><span>🚴</span><span class="font-semibold tabular-nums"><?= round($weekDistRide / 1000, 1) ?> km</span></div><?php endif; ?>
                   <?php if ($weekDistRun > 0): ?><div class="flex items-center justify-between gap-1 text-emerald-600 dark:text-emerald-400"><span>🏃</span><span class="font-semibold tabular-nums"><?= round($weekDistRun / 1000, 1) ?> km</span></div><?php endif; ?>
                   <?php if ($weekDistSwim > 0): ?><div class="flex items-center justify-between gap-1 text-cyan-600 dark:text-cyan-400"><span>🏊</span><span class="font-semibold tabular-nums"><?= round($weekDistSwim) ?> m</span></div><?php endif; ?>
                 </div>
+                <?php if ($pmRow): ?>
+                <div class="mt-2 grid grid-cols-3 gap-1 border-t border-border/60 pt-2 text-center">
+                  <div><p class="text-[10px] text-muted-foreground">Forme</p><p class="font-bold tabular-nums"><?= n($pmRow['ctl'], 1) ?></p></div>
+                  <div><p class="text-[10px] text-muted-foreground">Fatigue</p><p class="font-bold tabular-nums"><?= n($pmRow['atl'], 1) ?></p></div>
+                  <div><p class="text-[10px] text-muted-foreground">Fraîcheur</p><p class="font-bold tabular-nums <?= $pmRow['tsb'] > 5 ? 'text-emerald-600 dark:text-emerald-400' : ($pmRow['tsb'] < -30 ? 'text-red-600 dark:text-red-400' : '') ?>"><?= sprintf('%+.0f', $pmRow['tsb']) ?></p></div>
+                </div>
+                <?php endif; ?>
               </div>
               <div class="mt-3 pt-2.5 border-t border-border/60">
                 <div class="text-[11px] text-muted-foreground flex justify-between"><span>Charge</span><span class="font-medium"><?= $weekTss > 400 ? 'Élevée' : ($weekTss > 250 ? 'Modérée' : 'Récup') ?></span></div>
@@ -5101,6 +5151,81 @@ if ($p === 'calendar') {
         </div>
       </div>
     </div>
+
+    <?php /* ===================== Drag & drop (souris + tactile) ===================== */ ?>
+    <style>
+      .cal-drop-active { outline: 2px dashed var(--primary); outline-offset: -3px; }
+      #calDnDGhost { position: fixed; z-index: 9999; pointer-events: none; opacity: .92; transform: rotate(2deg); box-shadow: 0 12px 30px rgba(0,0,0,.28); }
+    </style>
+    <script>
+    (() => {
+      const st = { el: null, type: '', id: 0, ghost: null, active: false, sx: 0, sy: 0, timer: null, touch: false, over: null, moved: false };
+      const drops = () => document.querySelectorAll('.cal-drop');
+      async function send(action, params) {
+        const r = await fetch('sync.php', { method: 'POST', body: new URLSearchParams({ action, ...params }) });
+        let j = null; try { j = await r.json(); } catch (e) {}
+        if (!r.ok || !j || !j.ok) { alert('Déplacement impossible : ' + ((j && j.error) || ('HTTP ' + r.status))); return false; }
+        location.reload(); return true;
+      }
+      function begin(x, y) {
+        if (st.active || !st.el) return;
+        st.active = true; window.__calJustDragged = true;
+        const r = st.el.getBoundingClientRect();
+        const g = st.el.cloneNode(true);
+        g.id = 'calDnDGhost';
+        g.style.cssText += ';width:' + Math.max(90, Math.min(r.width, 240)) + 'px;top:' + (y - 18) + 'px;left:' + (x - 90) + 'px';
+        document.body.appendChild(g);
+        st.ghost = g;
+        st.el.style.opacity = '.35';
+        drops().forEach(c => { if (!c.contains(st.el)) c.classList.add('cal-drop-active'); });
+      }
+      function end(cancelled) {
+        if (st.timer) { clearTimeout(st.timer); st.timer = null; }
+        if (st.ghost) { st.ghost.remove(); st.ghost = null; }
+        if (st.el) st.el.style.opacity = '';
+        document.querySelectorAll('.cal-drop-active').forEach(c => c.classList.remove('cal-drop-active'));
+        const cell = cancelled ? null : st.over;
+        const wasActive = st.active, type = st.type, id = st.id;
+        st.active = false; st.el = null; st.over = null;
+        if (cell && wasActive && id) {
+          const date = cell.dataset.date || '';
+          if (date && type === 'plan') { send('plan_move', { id, date }); setTimeout(() => { window.__calJustDragged = false; }, 300); return; }
+          if (date && type === 'wo')   { send('plan_from_workout', { workout_id: id, date }); setTimeout(() => { window.__calJustDragged = false; }, 300); return; }
+        }
+        if (wasActive) setTimeout(() => { window.__calJustDragged = false; }, 200); else window.__calJustDragged = false;
+      }
+      document.addEventListener('pointerdown', e => {
+        if (e.button !== undefined && e.button > 0) return;
+        const src = e.target.closest ? e.target.closest('.draggable-plan, .draggable-wo') : null;
+        if (!src || (e.target.closest && e.target.closest('button, a, form, select, input, textarea'))) return;
+        st.el = src; st.type = src.classList.contains('draggable-wo') ? 'wo' : 'plan';
+        st.id = st.type === 'wo' ? (src.dataset.woId || '') : (src.dataset.planId || '');
+        st.sx = e.clientX; st.sy = e.clientY; st.touch = (e.pointerType === 'touch'); st.moved = false;
+        if (st.touch) st.timer = setTimeout(() => { st.timer = null; if (!st.moved) begin(st.sx, st.sy); }, 300);
+      });
+      document.addEventListener('pointermove', e => {
+        if (!st.el) return;
+        const dx = e.clientX - st.sx, dy = e.clientY - st.sy;
+        if (!st.active) {
+          if (Math.hypot(dx, dy) > 8) st.moved = true;            // scroll ou mouvement : on annule le long-press
+          if (st.touch || Math.hypot(dx, dy) < 4) return;
+          begin(e.clientX, e.clientY); return;
+        }
+        e.preventDefault();
+        st.ghost.style.left = (e.clientX - st.ghost.offsetWidth / 2) + 'px';
+        st.ghost.style.top = (e.clientY - 20) + 'px';
+        const hit = document.elementFromPoint(e.clientX, e.clientY);
+        const cell = hit && hit.closest ? hit.closest('.cal-drop') : null;
+        if (st.over && st.over !== cell) st.over.classList.remove('cal-drop-active');
+        st.over = cell;
+        if (cell) cell.classList.add('cal-drop-active');
+      }, { passive: false });
+      document.addEventListener('touchmove', e => { if (st.active) e.preventDefault(); }, { passive: false });
+      document.addEventListener('pointerup', e => { if (st.el) end(false); });
+      document.addEventListener('pointercancel', e => { if (st.el) end(true); });
+      document.addEventListener('keydown', e => { if (e.key === 'Escape' && st.el) end(true); });
+    })();
+    </script>
     <?php foot(); exit;
 }
 

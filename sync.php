@@ -231,6 +231,31 @@ try {
         db()->prepare('DELETE FROM planned_workouts WHERE id=?')->execute([(int)$_POST['id']]);
         echo json_encode(['ok' => true]);
 
+    } elseif ($action === 'plan_move') {
+        /* drag & drop : déplace une séance planifiée vers un autre jour */
+        $id = (int)($_POST['id'] ?? 0);
+        $d = trim((string)($_POST['date'] ?? ''));
+        if ($id <= 0 || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) throw new RuntimeException('Coordonnées de déplacement invalides.');
+        $has = db()->prepare('SELECT COUNT(*) FROM planned_workouts WHERE id=?'); $has->execute([$id]);
+        if (!(int)$has->fetchColumn()) throw new RuntimeException('Séance planifiée introuvable.');
+        db()->prepare('UPDATE planned_workouts SET date=? WHERE id=?')->execute([$d, $id]);
+        echo json_encode(['ok' => true]);
+
+    } elseif ($action === 'plan_from_workout') {
+        /* drag & drop depuis la banque : planifie une séance structurée sur un jour (copie structure + profile + icu_text) */
+        $wid = (int)($_POST['workout_id'] ?? 0);
+        $d = trim((string)($_POST['date'] ?? ''));
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) throw new RuntimeException('Date invalide.');
+        $wq = db()->prepare('SELECT * FROM workouts WHERE id=?'); $wq->execute([$wid]);
+        $w = $wq->fetch();
+        if (!$w) throw new RuntimeException('Séance structurée introuvable dans la banque.');
+        $structure = (string)$w['structure'];
+        $mode = ($w['mode'] ?? '') === 'hr' ? 'hr' : 'power';
+        $icuText = $structure !== '' ? coach_plan_text($structure, $mode) : '';
+        db()->prepare('INSERT INTO planned_workouts (date, sport, title, duration, distance, tss, tss_type, notes, structure, profile, workout_id, icu_text) VALUES (?,?,?,?,0,?,?,?,?,?,?,?)')
+            ->execute([$d, $w['sport'], $w['name'], $w['duration'], $w['tss'], $mode === 'hr' ? 'hrtss' : 'power', $w['notes'], $structure, $w['profile'], $wid, mb_substr($icuText, 0, 20000)]);
+        echo json_encode(['ok' => true]);
+
     } elseif ($action === 'account_password') {
         if (!auth_enabled()) throw new RuntimeException(t('Authentification désactivée.'));
         if ((string)($_POST['new'] ?? '') !== (string)($_POST['new2'] ?? '')) throw new RuntimeException('Les deux mots de passe ne correspondent pas.');
