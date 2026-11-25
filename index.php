@@ -6146,38 +6146,22 @@ if ($p === 'settings') {
     head(t('Paramètres'), 'settings');
     $pt = (int)cfg('run_thr_pace', 0);
     $f = fn($k, $d = '') => h(cfg($k, $d));
+    $gs = garmin_status();
     ?>
     <div class="space-y-6 max-w-3xl">
       <div>
-        <h1 class="text-2xl font-bold tracking-tight">Paramètres physiologiques & Connexions</h1>
-        <p class="text-sm text-muted-foreground">Configurez vos seuils d'entraînement et la synchronisation avec intervals.icu</p>
+        <h1 class="text-2xl font-bold tracking-tight">Paramètres</h1>
+        <p class="text-sm text-muted-foreground">Compte, connexions, seuils d'entraînement et module coach — tout se règle ici</p>
       </div>
+
+      <nav class="flex flex-wrap gap-2 text-xs">
+        <a href="#compte" class="rounded-full border px-3 py-1 hover:bg-muted">👤 Mon compte</a>
+        <a href="#connexion-icu" class="rounded-full border px-3 py-1 hover:bg-muted">🔗 Connexions</a>
+        <a href="#entrainement" class="rounded-full border px-3 py-1 hover:bg-muted">🏋️ Entraînement</a>
+        <?php if (auth_enabled()): ?><a href="#coach" class="rounded-full border px-3 py-1 hover:bg-muted">🎓 Module coach</a><?php endif; ?>
+      </nav>
 
       <?php if (isset($_GET['purged'])): ?><div class="alert" data-variant="destructive"><h2>Base réinitialisée : toutes les données locales ont été supprimées.</h2></div><?php endif; ?>
-
-      <div class="card p-6 space-y-3">
-        <header>
-          <h3 class="text-base font-semibold">Apparence</h3>
-          <p class="text-xs text-muted-foreground">Style de l'interface (Basecoat) — appliqué immédiatement, mémorisé sur cet appareil</p>
-        </header>
-        <div class="grid gap-4 sm:grid-cols-2">
-          <div class="field">
-            <label class="text-xs font-medium">Style</label>
-            <select id="styleSel" class="select h-9 text-sm">
-              <?php foreach (['vega', 'nova', 'maia', 'lyra', 'mira', 'luma', 'sera', 'rhea'] as $s) echo '<option value="' . $s . '">' . ucfirst($s) . '</option>'; ?>
-            </select>
-          </div>
-          <form method="post" action="?p=settings" class="field">
-            <label class="text-xs font-medium" for="langSel">Langue / Language</label>
-            <select id="langSel" name="lang" class="select h-9 text-sm" onchange="this.form.submit()">
-              <?php foreach (trq_langs() as $trqLc => $trqLn): ?>
-              <option value="<?= $trqLc ?>"<?= trq_lang() === $trqLc ? ' selected' : '' ?>><?= htmlspecialchars($trqLn, ENT_QUOTES, 'UTF-8') ?></option>
-              <?php endforeach; ?>
-            </select>
-            <noscript><button class="btn mt-2" data-size="sm" type="submit">OK</button></noscript>
-          </form>
-        </div>
-      </div>
 
       <?php if (isset($_GET['saved'])): ?>
         <div class="alert">
@@ -6194,8 +6178,16 @@ if ($p === 'settings') {
         <div class="alert" data-variant="destructive"><h2><?= h((string)$_GET['err']) ?></h2></div>
       <?php endif; ?>
 
+      <?php if (isset($_GET['garmin'])): ?>
+        <?php if ((int)$_GET['garmin'] === 1): ?>
+        <div class="alert"><h3>Compte Garmin Connect lié ✅</h3><p class="text-xs text-muted-foreground">La synchronisation Garmin (séances, sommeil, FC repos, HRV) sera activée automatiquement dès l'ouverture des flux.</p></div>
+        <?php else: ?>
+        <div class="alert"><h3>Garmin déconnecté</h3><p class="text-xs text-muted-foreground">Aucune donnée Garmin n'est conservée : les clés d'accès ont été supprimées de ta base.</p></div>
+        <?php endif; ?>
+      <?php endif; ?>
+
       <?php if (auth_enabled()): $cu = current_user(); ?>
-      <div class="card p-6 space-y-4">
+      <div id="compte" class="card p-6 space-y-4 scroll-mt-20">
         <header class="flex items-start justify-between gap-3">
           <div><h3 class="text-base font-semibold">Mon compte</h3>
             <p class="text-xs text-muted-foreground"><?= h($cu['name']) ?> · <?= h($cu['email']) ?> · <?= $cu['role'] === 'admin' ? 'administrateur' : ($cu['role'] === 'coach' ? 'coach' : 'utilisateur') ?></p></div>
@@ -6224,6 +6216,26 @@ if ($p === 'settings') {
           <p class="mt-2 text-xs text-muted-foreground">Supprime définitivement votre compte et toutes vos données (activités, séances, réglages). Cette action est irréversible.</p>
           <div class="mt-3 flex flex-wrap items-center gap-2"><input class="input h-8 w-56 text-sm" type="password" id="accDelPw" placeholder="Votre mot de passe" autocomplete="current-password"><button type="button" class="btn" data-variant="destructive" data-size="sm" id="accDelBtn">Supprimer définitivement</button><span class="text-xs text-destructive" id="accDelMsg"></span></div>
         </details>
+        <div class="rounded-lg border p-3 space-y-3">
+          <p class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Apparence & langue</p>
+          <div class="grid gap-4 sm:grid-cols-2">
+            <div class="field">
+              <label class="text-xs font-medium">Style</label>
+              <select id="styleSel" class="select h-9 text-sm">
+                <?php foreach (['vega', 'nova', 'maia', 'lyra', 'mira', 'luma', 'sera', 'rhea'] as $s) echo '<option value="' . $s . '">' . ucfirst($s) . '</option>'; ?>
+              </select>
+            </div>
+            <form method="post" action="?p=settings" class="field">
+              <label class="text-xs font-medium" for="langSel">Langue / Language</label>
+              <select id="langSel" name="lang" class="select h-9 text-sm" onchange="this.form.submit()">
+                <?php foreach (trq_langs() as $trqLc => $trqLn): ?>
+                <option value="<?= $trqLc ?>"<?= trq_lang() === $trqLc ? ' selected' : '' ?>><?= htmlspecialchars($trqLn, ENT_QUOTES, 'UTF-8') ?></option>
+                <?php endforeach; ?>
+              </select>
+              <noscript><button class="btn mt-2" data-size="sm" type="submit">OK</button></noscript>
+            </form>
+          </div>
+        </div>
       </div>
       <script>
       document.addEventListener('click', async (ev) => {   // délégation : la carte coach est rendue plus bas dans le DOM
@@ -6251,7 +6263,7 @@ if ($p === 'settings') {
       <?php endif; ?>
 
       <form method="post" class="space-y-6">
-        <div class="card p-6 space-y-4">
+        <div id="connexion-icu" class="card p-6 space-y-4 scroll-mt-20">
           <header>
             <h3 class="text-base font-semibold">Connexion intervals.icu</h3>
             <p class="text-xs text-muted-foreground">Générez une clé API sur intervals.icu → Settings → Developer Settings</p>
@@ -6295,7 +6307,54 @@ if ($p === 'settings') {
         </div>
         <?php endif; ?>
 
-        <div class="card p-6 space-y-4">
+        <div id="connexion-garmin" class="card p-6 space-y-4 scroll-mt-20">
+          <header class="flex items-start justify-between gap-3">
+            <div class="flex items-center gap-3">
+              <span class="flex size-9 items-center justify-center rounded-lg bg-sky-500/15 text-lg">⌚</span>
+              <div>
+                <h3 class="text-base font-semibold">Connexion Garmin</h3>
+                <p class="text-xs text-muted-foreground">Socle prêt : la liaison s'activera dès l'attribution des accès développeur Garmin</p>
+              </div>
+            </div>
+            <span class="badge" data-variant="<?= $gs['connected'] ? 'default' : 'outline' ?>"><?= $gs['connected'] ? 'Connecté' : 'En préparation' ?></span>
+          </header>
+
+          <?php if ($gs['connected']): ?>
+          <div class="flex flex-wrap items-center gap-3 rounded-lg border p-3 text-sm">
+            <span>Compte lié : <b><?= $gs['display'] !== '' ? h($gs['display']) : 'Garmin Connect' ?></b></span>
+            <?php if ($gs['expires_at']): ?><span class="text-xs text-muted-foreground">token valable jusqu'au <?= date('d/m H:i', (int)$gs['expires_at']) ?></span><?php endif; ?>
+            <a class="btn ml-auto" data-variant="destructive" data-size="sm" href="oauth_garmin.php?disconnect=1">Déconnecter</a>
+          </div>
+          <?php else: ?>
+          <div class="grid gap-3 sm:grid-cols-2">
+            <div class="rounded-lg border p-3"><p class="text-sm font-medium">🚴 Séances détaillées</p><p class="text-xs text-muted-foreground">Import de l'activité : puissance, FC, allures, zones, traces GPS.</p></div>
+            <div class="rounded-lg border p-3"><p class="text-sm font-medium">😴 Sommeil & bien-être</p><p class="text-xs text-muted-foreground">Sommeil et récupération issus de la montre, en complément d'intervals.icu.</p></div>
+            <div class="rounded-lg border p-3"><p class="text-sm font-medium">❤️ FC repos & HRV rMSSD</p><p class="text-xs text-muted-foreground">Alimente la baseline de récupération utilisée par la forme du jour.</p></div>
+            <div class="rounded-lg border p-3"><p class="text-sm font-medium">🔄 Pull + webhook</p><p class="text-xs text-muted-foreground">Récupération à la demande et notification push Garmin en temps réel.</p></div>
+          </div>
+          <p class="text-[11px] text-muted-foreground">Données stockées uniquement dans ta base TRQ locale. Liaison révocable à tout moment depuis cette carte.</p>
+          <?php endif; ?>
+
+          <details class="rounded-lg border p-3">
+            <summary class="cursor-pointer text-sm font-medium">Statut technique</summary>
+            <ul class="mt-2 space-y-1 text-xs text-muted-foreground">
+              <li>Accès développeur Garmin : <?= $gs['configured'] ? '✓ clés configurées' : 'en attente d\'attribution (formulaire soumis)' ?></li>
+              <li>Liaison du compte : <?= $gs['connected'] ? '✓ connecté' : 'pas encore liée' ?></li>
+              <li>URL de rappel OAuth à enregistrer chez Garmin : <code class="rounded bg-muted px-1"><?= h(garmin_redirect_uri()) ?></code></li>
+              <li>Endpoint de rappel <code>oauth_garmin.php</code> et socle <code>garmin_lib.php</code> en place — aucun appel réseau tant que les clés sont absentes.</li>
+            </ul>
+          </details>
+
+          <div>
+            <?php if ($gs['configured']): ?>
+            <a class="btn" href="oauth_garmin.php">Connecter mon compte Garmin</a>
+            <?php elseif (!auth_enabled() || (($cu['role'] ?? '') === 'admin')): ?>
+            <a class="btn" data-variant="outline" href="oauth_garmin.php">Voir l'état de la connexion</a>
+            <?php endif; ?>
+          </div>
+        </div>
+
+        <div id="entrainement" class="card p-6 space-y-4 scroll-mt-20">
           <header>
             <h3 class="text-base font-semibold">Profil athlète</h3>
             <p class="text-xs text-muted-foreground">Personnalise les diagnostics et les conseils du coach selon ton expérience et tes disciplines</p>
@@ -6384,7 +6443,7 @@ if ($p === 'settings') {
               $myInvite = coach_invite_get((int)$me['id']);
               $coachFlash = $_SESSION['coach_flash'] ?? null; if ($coachFlash !== null) unset($_SESSION['coach_flash']);
               $coachMsg = $_SESSION['coach_flash_msg'] ?? null; if ($coachMsg !== null) unset($_SESSION['coach_flash_msg']); ?>
-        <div class="card p-6 space-y-4">
+        <div id="coach" class="card p-6 space-y-4 scroll-mt-20">
           <header>
             <h3 class="text-base font-semibold">Module coach</h3>
             <p class="text-xs text-muted-foreground">Partage entraîneur/athlète : c'est toi qui invites, qui acceptes et qui peux révoquer à tout moment</p>
