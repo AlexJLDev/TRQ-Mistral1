@@ -1622,6 +1622,14 @@ if ($p === 'activities') {
 /* ========================================================
    DÉTAIL ACTIVITÉ & ANALYSE COMPLETE WKO5 / TRAININGPEAKS
    ======================================================== */
+/* ---------- Post : adopter une FTP estimée depuis une séance ---------- */
+if ($p === 'activity' && $_SERVER['REQUEST_METHOD'] === 'POST' && array_key_exists('ftp_adopt', $_POST)) {
+    $v = (int)($_POST['ftp_val'] ?? 0);
+    if ($v >= 50 && $v <= 1000) cfg_set('ftp', (string)$v);
+    header('Location: ?p=activity&id=' . urlencode(trim((string)($_POST['act_id'] ?? ''))) . '&ftpadopt=1');
+    exit;
+}
+
 if ($p === 'activity') {
     $st = $pdo->prepare('SELECT * FROM activities WHERE id=?');
     $st->execute([$_GET['id'] ?? '']);
@@ -1722,8 +1730,34 @@ if ($p === 'activity') {
         }
     }
     $workoutMmp = $a['mmp'] ? json_decode($a['mmp'], true) : [];
+
+    /* FTP estimée par les meilleurs efforts de la séance : 100 % du meilleur 60 min, sinon 95 % du meilleur 20 min (classique) */
+    $ftpEst = null; $ftpSrc = ''; $best20 = 0.0;
+    if ($a['sport'] === 'ride' && $rawWatts) {
+        $best20 = (float)($workoutMmp[1200] ?? 0);
+        if ($best20 <= 0) $best20 = pr_best_mean($rawWatts, 1200);
+        $best60 = (float)($workoutMmp[3600] ?? 0);
+        if ($best60 <= 0) $best60 = pr_best_mean($rawWatts, 3600);
+        if ($best60 > 0) { $ftpEst = round($best60); $ftpSrc = '60'; }
+        elseif ($best20 > 0) { $ftpEst = round($best20 * 0.95); $ftpSrc = '20'; }
+    }
+    $curFtp = (float)cfg('ftp', 0);
+    /* nouveau record 20 min ? — meilleur 20 min des 90 jours SANS cette séance */
+    $prevBest20 = 0.0;
+    if ($a['sport'] === 'ride' && $best20 > 0) {
+        $qpb = $pdo->prepare("SELECT mmp FROM activities WHERE sport='ride' AND mmp IS NOT NULL AND id <> ? AND date >= date('now','-90 days')");
+        $qpb->execute([$a['id']]);
+        foreach ($qpb as $r) foreach (json_decode($r['mmp'], true) ?: [] as $d => $v) if ((int)$d === 1200) $prevBest20 = max($prevBest20, (float)$v);
+    }
+    $newRec20 = $prevBest20 > 0 && $best20 > $prevBest20 + 0.5;
+    /* carte affichée seulement si l'estimation est crédible (≥ 95 % de la FTP actuelle, ou pas de FTP définie) */
+    $ftpUseful = $ftpEst !== null && ($curFtp <= 0 || $ftpEst >= $curFtp * 0.95);
+    $ftpSuggest = $ftpEst !== null && ($curFtp <= 0 || $ftpEst >= ceil($curFtp * 1.02));
     ?>
     <div class="space-y-6">
+      <?php if (isset($_GET['ftpadopt'])): ?>
+        <div class="alert"><h2><?= t('FTP mise à jour') ?> : <?= n((float)cfg('ftp', 0), 0) ?> W</h2><p class="text-xs text-muted-foreground"><?= t('Tes zones, TSS et diagnostics utilisent désormais cette valeur.') ?></p></div>
+      <?php endif; ?>
       <div class="flex items-center justify-between">
         <a class="text-xs text-muted-foreground hover:underline flex items-center gap-1" href="?p=activities">
           ← Retour aux activités
@@ -2955,6 +2989,35 @@ if ($p === 'activity') {
       </div>
 
       <div id="sec-distributions" class="space-y-6 scroll-mt-24">
+
+      <!-- FTP estimée par la séance -->
+      <?php if ($ftpUseful): ?>
+      <div class="card">
+        <section class="p-4 flex flex-wrap items-center justify-between gap-3">
+          <div class="min-w-0">
+            <h3 class="text-base font-semibold">🎯 <?= t('FTP estimée') ?> : <span class="text-primary"><?= n($ftpEst) ?> W</span>
+              <?php if ($newRec20): ?><span class="badge bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 ml-1"><?= t('Nouveau record 20 min') ?></span><?php endif; ?>
+            </h3>
+            <p class="text-xs text-muted-foreground">
+              <?= $ftpSrc === '60' ? t('meilleure puissance 60 min') . ' : ' . n(round((float)($workoutMmp[3600] ?? pr_best_mean($rawWatts, 3600)))) . ' W' : t('meilleure puissance 20 min') . ' : ' . n(round((float)($workoutMmp[1200] ?? $best20))) . ' W × 95 %' ?>
+              · <?= t('FTP actuelle') ?> : <?= $curFtp > 0 ? n($curFtp, 0) . ' W' : t('non configurée') ?>
+            </p>
+          </div>
+          <div class="flex items-center gap-2">
+            <?php if ($ftpSuggest): ?>
+              <form method="post" action="?p=activity">
+                <input type="hidden" name="ftp_adopt" value="1">
+                <input type="hidden" name="ftp_val" value="<?= $ftpEst ?>">
+                <input type="hidden" name="act_id" value="<?= h((string)$a['id']) ?>">
+                <button class="btn" data-size="sm" type="submit"><?= t('Adopter cette FTP') ?></button>
+              </form>
+            <?php elseif ($curFtp > 0): ?>
+              <span class="badge bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">✓ <?= t('cohérente avec ta FTP actuelle') ?></span>
+            <?php endif; ?>
+          </div>
+        </section>
+      </div>
+      <?php endif; ?>
 
       <!-- Graphique PDC de la séance vs Meilleure PDC 90j de la saison -->
       <div class="grid lg:grid-cols-2 gap-6">
