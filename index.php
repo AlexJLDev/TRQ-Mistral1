@@ -1265,6 +1265,17 @@ if ($p === 'dashboard') {
                     $dur = max(1, (int)($b['dur'] ?? 60));
                     $lo = (float)($b['lo'] ?? 100);
                     $hi = (float)($b['hi'] ?? $lo);
+                    /* rampe : subdivision en tranches interpolées → la pente se voit (escalier fin) */
+                    if (!empty($b['ramp']) && abs($hi - $lo) > 0.5 && $dur >= 8) {
+                        $nSlices = min(14, max(4, (int)round($dur / 30)));
+                        for ($r = 0; $r < $nSlices; $r++) {
+                            $lo2 = $lo + ($hi - $lo) * ($r / $nSlices);
+                            $hi2 = $lo + ($hi - $lo) * (($r + 1) / $nSlices);
+                            $npSegs[] = ['dur' => $dur / $nSlices, 'lo' => $lo2, 'hi' => $hi2, 'kind' => (string)($b['kind'] ?? 'work'), 'ramp' => true];
+                        }
+                        $npTotal += $dur;
+                        continue;
+                    }
                     $npSegs[] = ['dur' => $dur, 'lo' => min($lo, $hi), 'hi' => max($lo, $hi), 'kind' => (string)($b['kind'] ?? 'work')];
                     $npTotal += $dur;
                 }
@@ -1300,7 +1311,7 @@ if ($p === 'dashboard') {
             <?php foreach ($npSegs as $s): $npC1 = $npCol($s['lo']); $npC2 = $npCol($s['hi']); ?>
             <div class="min-w-[3px] rounded-t-[3px]"
                  style="width:<?= round($s['dur'] / $npTotal * 100, 3) ?>%;height:<?= max(10, min(100, $s['hi'])) ?>%;background:linear-gradient(to top, <?= $npC1 ?>, <?= $npC2 ?>)"
-                 title="<?= h(($npKindLbl[$s['kind']] ?? $s['kind']) . ' — ' . fmt_dur($s['dur']) . ' @ ' . (abs($s['hi'] - $s['lo']) < 0.5 ? round($s['lo']) : round($s['lo']) . '–' . round($s['hi'])) . ' ' . $npUnit) ?>"></div>
+                 title="<?= h(($npKindLbl[$s['kind']] ?? $s['kind']) . ' — ' . fmt_dur((int)$s['dur']) . ' @ ' . (!empty($s['ramp']) ? round($s['lo']) . '→' . round($s['hi']) : (abs($s['hi'] - $s['lo']) < 0.5 ? round($s['lo']) : round($s['lo']) . '–' . round($s['hi']))) . ' ' . $npUnit) ?>"></div>
             <?php endforeach; ?>
           </div>
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
@@ -4986,7 +4997,7 @@ if ($p === 'calendar') {
       <?php endif; ?>
 
       <?php if ($calLib): ?>
-      <details class="rounded-xl border bg-muted/30" open>
+      <details class="rounded-xl border bg-muted/30">
         <summary class="cursor-pointer select-none px-3.5 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">🏋️ Banque de séances structurées <span class="text-primary"><?= count($calLib) ?></span> — glisse une séance sur un jour pour la planifier</summary>
         <div class="flex flex-wrap gap-2 px-3.5 pb-3">
           <?php foreach ($calLib as $cw): $cwProfile = json_decode((string)$cw['profile'], true) ?: []; ?>
