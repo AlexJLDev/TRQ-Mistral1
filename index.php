@@ -4896,6 +4896,10 @@ if ($p === 'calendar') {
             $out .= '<button type="button" class="absolute right-6 top-1 flex size-5 items-center justify-center rounded text-xs hover:bg-muted ' . ($sent ? 'text-emerald-600' : 'hidden text-muted-foreground group-hover/pl:flex') . '" onclick="pushPlanned(' . (int)$pl['id'] . ')" title="' . ($sent ? 'Envoyée à intervals.icu (cliquer pour mettre à jour)' : 'Envoyer à intervals.icu') . '" aria-label="Envoyer à intervals.icu">' . ($sent ? '✓' : '↗') . '</button>';
         }
         $out .= '<button type="button" class="absolute right-1 top-1 hidden size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted group-hover/pl:flex" onclick="deletePlanned(' . (int)$pl['id'] . ')" title="Supprimer la séance planifiée" aria-label="Supprimer">✕</button>';
+        if ($canDrag) {
+            $mtTitle = h(json_encode((string)$pl['title'], JSON_UNESCAPED_UNICODE));
+            $out .= '<button type="button" class="absolute bottom-1 right-1 flex size-6 items-center justify-center rounded text-xs text-muted-foreground transition hover:bg-muted" onclick="calStartMove(\'plan\', ' . (int)$pl['id'] . ', ' . $mtTitle . ')" title="Déplacer vers un autre jour (touche le jour de destination ensuite)" aria-label="Déplacer">✥</button>';
+        }
         if ($hasStruct) {
             $out .= '<a href="?p=workouts&plan=' . (int)$pl['id'] . '" class="block truncate pr-8 font-semibold hover:underline" title="Ouvrir dans le builder">🧩 ' . h($pl['title']) . '</a>'
                   . '<div class="mt-1">' . workout_mini_svg(json_decode($pl['profile'], true) ?: [], ($pl['tss_type'] ?? '') === 'hrtss' ? 'hr' : 'power', 160, 26) . '</div>';
@@ -4994,6 +4998,7 @@ if ($p === 'calendar') {
             <div class="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground tabular-nums">
               <span>⏱ <?= fmt_dur((int)$cw['duration']) ?></span><span class="font-bold text-foreground"><?= n((float)$cw['tss']) ?> TSS</span>
             </div>
+            <button type="button" class="mt-1.5 inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] hover:bg-muted" onclick="event.stopPropagation(); calStartMove('wo', <?= (int)$cw['id'] ?>, <?= h(json_encode((string)$cw['name'], JSON_UNESCAPED_UNICODE)) ?>)">📅 Planifier un jour</button>
           </div>
           <?php endforeach; ?>
         </div>
@@ -5155,7 +5160,11 @@ if ($p === 'calendar') {
     <?php /* ===================== Drag & drop (souris + tactile) ===================== */ ?>
     <style>
       .cal-drop-active { outline: 2px dashed var(--primary); outline-offset: -3px; }
+      .cal-move-target { outline: 2px dashed var(--primary); outline-offset: -3px; cursor: pointer; }
+      .draggable-plan, .draggable-wo { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
       #calDnDGhost { position: fixed; z-index: 9999; pointer-events: none; opacity: .92; transform: rotate(2deg); box-shadow: 0 12px 30px rgba(0,0,0,.28); }
+      #calMoveBar { animation: calMoveIn .15s ease-out; }
+      @keyframes calMoveIn { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
     </style>
     <script>
     (() => {
@@ -5193,6 +5202,45 @@ if ($p === 'calendar') {
           if (date && type === 'wo')   { send('plan_from_workout', { workout_id: id, date }); setTimeout(() => { window.__calJustDragged = false; }, 300); return; }
         }
         if (wasActive) setTimeout(() => { window.__calJustDragged = false; }, 200); else window.__calJustDragged = false;
+      }
+
+      /* ---- Mode "jour cible" (secours mobile / précision) : tap sur ✥ ou 📅 puis tap sur le jour ---- */
+      let move = null;   // {type, id, title}
+      const bar = document.createElement('div');
+      bar.id = 'calMoveBar';
+      bar.className = 'hidden fixed bottom-3 left-1/2 -translate-x-1/2 z-50 flex-wrap items-center gap-3 rounded-full border bg-popover px-4 py-2 shadow-lg';
+      bar.style.display = 'none';
+      bar.innerHTML = '<span id="calMoveTxt" class="text-sm font-medium"></span>' +
+                      '<button type="button" id="calMoveCancel" class="border rounded-full px-3 py-1 text-xs hover:bg-muted">Annuler</button>';
+      document.body.appendChild(bar);
+      document.addEventListener('click', e => {
+        if (e.target.closest && e.target.closest('#calMoveCancel')) { calEndMove(); return; }
+        if (!move) return;
+        const cell = e.target.closest ? e.target.closest('.cal-drop') : null;
+        if (cell) {
+          e.preventDefault(); e.stopPropagation();
+          const date = cell.dataset.date || '';
+          const m = move; calEndMove();
+          if (date && m) {
+            if (m.type === 'plan') send('plan_move', { id: m.id, date });
+            else send('plan_from_workout', { workout_id: m.id, date });
+          }
+          return;
+        }
+        if (!e.target.closest || !e.target.closest('.draggable-plan, .draggable-wo')) calEndMove();  // tap ailleurs = annule
+      });
+      window.calStartMove = function (type, id, title) {
+        if (st.active) return;
+        move = { type, id, title: title || '' };
+        const txt = document.getElementById('calMoveTxt');
+        if (txt) txt.textContent = (type === 'wo' ? 'Touche le jour où planifier' : 'Touche le jour de destination') + ' : ' + (title || '') + ' (Annuler en touchant ailleurs)';
+        bar.classList.remove('hidden'); bar.style.display = 'flex';
+        document.querySelectorAll('.cal-drop').forEach(c => c.classList.add('cal-move-target'));
+      };
+      function calEndMove() {
+        move = null;
+        bar.classList.add('hidden'); bar.style.display = 'none';
+        document.querySelectorAll('.cal-move-target').forEach(c => c.classList.remove('cal-move-target'));
       }
       document.addEventListener('pointerdown', e => {
         if (e.button !== undefined && e.button > 0) return;
