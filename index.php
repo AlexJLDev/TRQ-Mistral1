@@ -1238,9 +1238,32 @@ if ($p === 'dashboard') {
       ?>
     </div>
 
-    <?php /* Mon prochain entraînement (style TrainingPeaks) */
+    <?php /* Mon prochain entraînement (style TrainingPeaks) — une séance déjà réalisée (rattachée à une sortie, lien manuel ou appariement du jour) est sautée */
     $nextPlan = null;
-    try { $nextPlan = $pdo->query("SELECT * FROM planned_workouts WHERE completed=0 AND (activity_id IS NULL OR activity_id='') AND substr(date,1,10) >= date('now') ORDER BY substr(date,1,10), id LIMIT 1")->fetch() ?: null; } catch (Throwable $e) {}
+    try {
+        $npCands = $pdo->query("SELECT * FROM planned_workouts WHERE completed=0 AND substr(date,1,10) >= date('now','-7 days') ORDER BY substr(date,1,10), id")->fetchAll();
+        if ($npCands) {
+            $npReserved = plan_reserved_ids();
+            $npManual = [];
+            foreach ($pdo->query("SELECT activity_id FROM planned_workouts WHERE activity_id IS NOT NULL AND activity_id <> ''")->fetchAll(PDO::FETCH_COLUMN) as $mid) {
+                $ms = $pdo->prepare('SELECT ' . ACT_COLS . ' FROM activities WHERE id=?'); $ms->execute([$mid]); if ($mr = $ms->fetch()) $npManual[$mid] = $mr;
+            }
+            $npToday = date('Y-m-d');
+            $npByDay = [];
+            foreach ($npCands as $npc) $npByDay[substr((string)$npc['date'], 0, 10)][] = $npc;
+            foreach ($npByDay as $nd => $nps) {
+                $ns = $pdo->prepare('SELECT ' . ACT_COLS . ' FROM activities WHERE substr(date,1,10) = ?');
+                $ns->execute([$nd]);
+                $npPairs = plan_pair_day($nps, $ns->fetchAll(), $npManual, $npReserved);
+                foreach ($nps as $npc) {
+                    if (isset($npPairs[$npc['id']])) continue;                      /* déjà réalisée — appariée à une sortie */
+                    if (substr((string)$npc['date'], 0, 10) < $npToday) continue;   /* passée non réalisée — ignorée */
+                    $nextPlan = $npc;
+                    break 2;
+                }
+            }
+        }
+    } catch (Throwable $e) {}
     if ($nextPlan):
         $npDay  = substr((string)$nextPlan['date'], 0, 10);
         $npDays = (int)floor((strtotime($npDay) - strtotime(date('Y-m-d'))) / 86400);
