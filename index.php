@@ -134,6 +134,27 @@ if ($p === 'coach_athlete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
+/* ---------- Post commentaire coach sur une séance de l'athlète ---------- */
+if (($p === 'coach_athlete' || $p === 'coach_activity') && $_SERVER['REQUEST_METHOD'] === 'POST'
+    && array_key_exists('coach_cmt_act', $_POST)) {
+    if (coach_enabled() && coach_is_coach()) {
+        $cid = current_uid();
+        $pid = (int)($_POST['athlete_id'] ?? 0);
+        $actId = trim((string)($_POST['activity_id'] ?? ''));
+        $back = $p === 'coach_athlete' ? '?p=coach_athlete&id=' . $pid : '?p=coach_activity&aid=' . $pid . '&id=' . urlencode($actId);
+        try {
+            coach_comment_add($cid, $pid, $actId, (string)($_POST['body'] ?? ''));
+            header('Location: ' . $back . '&cmt=1');
+            exit;
+        } catch (Throwable $e) {
+            header('Location: ' . $back . '&err=' . urlencode($e->getMessage()));
+            exit;
+        }
+    }
+    header('Location: ?p=coach');
+    exit;
+}
+
 /* ---------- Post Wellness rapide ---------- */
 if ($p === 'wellness' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $d = trim($_POST['date'] ?? date('Y-m-d'));
@@ -2142,6 +2163,19 @@ if ($p === 'activity') {
                 <p class="mt-3 text-[11px] text-muted-foreground">Analyse automatique indicative, calculée à partir de vos seuils (FTP, LTHR) et des données de la sortie.</p>
               </details>
             <?php endif; ?>
+          </section>
+        </div>
+      <?php endif; ?>
+
+      <!-- Commentaires de tes coaches -->
+      <?php $myCmts = coach_comments_current((string)$a['id']); ?>
+      <?php if ($myCmts): ?>
+        <div class="card">
+          <section class="p-4 space-y-2">
+            <h3 class="text-sm font-semibold">💬 <?= t('Ton coach') ?></h3>
+            <?php foreach ($myCmts as $mc): ?>
+              <p class="border-l-2 border-primary/40 pl-3 text-sm leading-relaxed"><b><?= h($mc['coach_name']) ?></b> · <span class="text-xs text-muted-foreground"><?= date('d/m/Y H:i', (int)$mc['ts']) ?></span><br><?= h($mc['body']) ?></p>
+            <?php endforeach; ?>
           </section>
         </div>
       <?php endif; ?>
@@ -5156,17 +5190,37 @@ if ($p === 'coach_athlete') {
       <?php if (!$acts): ?><p class="p-4 text-sm text-muted-foreground"><?= t('Aucune séance enregistrée.') ?></p>
       <?php else: ?>
       <div class="table-container border-0"><table class="table">
-        <thead><tr><th><?= t('Date') ?></th><th><?= t('Séance') ?></th><th><?= t('Durée') ?></th><th><?= t('Dist.') ?></th><th><?= t('Charge') ?></th><th>IF</th><th><?= t('Puiss./Allure') ?></th></tr></thead>
+        <thead><tr><th><?= t('Date') ?></th><th><?= t('Séance') ?></th><th><?= t('Durée') ?></th><th><?= t('Dist.') ?></th><th><?= t('Charge') ?></th><th>IF</th><th><?= t('Puiss./Allure') ?></th><th>💬</th></tr></thead>
         <tbody>
+        <?php $cmtsAll = coach_comment_list($aid) ?: []; $cmtsByAct = [];
+        foreach ($cmtsAll as $cq) $cmtsByAct[(string)$cq['activity_id']][] = $cq; ?>
         <?php foreach ($acts as $a): ?>
           <tr>
             <td class="whitespace-nowrap text-xs text-muted-foreground"><?= h(substr((string)$a['date'], 0, 10)) ?></td>
-            <td><div class="font-medium text-sm"><?= h((string)($a['name'] ?: $a['type'])) ?></div><div class="mt-0.5"><?= sport_badge((string)$a['sport'], (string)$a['type']) ?></div></td>
+            <td><div class="font-medium text-sm"><a class="hover:underline" href="?p=coach_activity&aid=<?= $aid ?>&id=<?= h((string)$a['id']) ?>"><?= !empty($cmtsByAct[(string)$a['id']]) ? '💬 ' : '' ?><?= h((string)($a['name'] ?: $a['type'])) ?></a></div><div class="mt-0.5"><?= sport_badge((string)$a['sport'], (string)$a['type']) ?></div></td>
             <td class="tabular-nums text-xs"><?= fmt_dur((int)$a['duration']) ?></td>
             <td class="tabular-nums text-xs"><?= $a['distance'] ? n($a['distance'] / 1000, 1) . ' km' : '–' ?></td>
             <td><?= tss_badge($a['tss'] !== null ? (float)$a['tss'] : null, $a['tss_type'] ?? 'power') ?></td>
             <td class="tabular-nums text-xs"><?= n($a['if_'], 2) ?></td>
             <td class="tabular-nums font-semibold text-xs"><?= $a['sport'] === 'run' ? ($a['avg_speed'] ? pace((float)$a['avg_speed']) . ' /km' : '–') : ($a['np'] ? n($a['np']) . ' W' : '–') ?></td>
+            <td class="align-top">
+              <?php $ca = $cmtsByAct[(string)$a['id']] ?? []; ?>
+              <details>
+                <summary class="cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground"><?= t('Commenter') ?><?= $ca ? ' (' . count($ca) . ')' : '' ?></summary>
+                <div class="mt-1 w-64 space-y-1">
+                  <?php foreach ($ca as $cc): ?>
+                    <p class="rounded bg-muted/50 px-2 py-1 text-[11px] leading-snug"><b><?= h($cc['coach_name']) ?></b> · <?= date('d/m H:i', (int)$cc['ts']) ?><br><?= h($cc['body']) ?></p>
+                  <?php endforeach; ?>
+                  <form method="post" action="?p=coach_athlete" class="space-y-1">
+                    <input type="hidden" name="coach_cmt_act" value="c">
+                    <input type="hidden" name="athlete_id" value="<?= $aid ?>">
+                    <input type="hidden" name="activity_id" value="<?= h((string)$a['id']) ?>">
+                    <textarea class="input text-xs" name="body" rows="2" maxlength="2000" placeholder="<?= h(t('Un mot pour ton athlète…')) ?>"></textarea>
+                    <button class="btn w-full" data-size="sm" data-variant="outline" type="submit"><?= t('Envoyer') ?></button>
+                  </form>
+                </div>
+              </details>
+            </td>
           </tr>
         <?php endforeach; ?>
         </tbody></table></div>
@@ -5209,6 +5263,8 @@ if ($p === 'coach_athlete') {
     ?>
     <?php if (isset($_GET['err'])): ?>
       <div class="alert" data-variant="destructive"><h2><?= h((string)$_GET['err']) ?></h2></div>
+    <?php elseif (isset($_GET['cmt'])): ?>
+      <div class="alert"><h2><?= t('Commentaire envoyé à ton athlète.') ?></h2></div>
     <?php elseif (isset($_GET['plan'])): ?>
       <div class="alert"><h2><?= $_GET['plan'] === '0' ? t('La séance n’a pas pu être ajoutée.') : t('Séance planifiée ajoutée dans le calendrier de ton athlète.') ?></h2></div>
     <?php endif; ?>
@@ -5339,6 +5395,154 @@ if ($p === 'coach_athlete') {
       });
     })();
     </script>
+    <?php foot(); exit;
+}
+
+/* ========================================================
+   COACH — DÉTAIL D'UNE SÉANCE DE L'ATHLÈTE (graphes / laps / commentaires)
+   ======================================================== */
+if ($p === 'coach_activity') {
+    head(t('Séance (vue coach)'), 'coach');
+    if (!coach_enabled() || !coach_is_coach()) {
+        echo '<div class="alert" data-variant="destructive"><h2>' . t('Accès réservé aux coaches.') . '</h2></div>';
+        foot(); exit;
+    }
+    $aid = (int)($_GET['aid'] ?? 0);
+    $actId = trim((string)($_GET['id'] ?? ''));
+    if ($aid <= 0 || $actId === '' || !coach_is_active(current_uid(), $aid)) {
+        echo '<div class="alert" data-variant="destructive"><h2>' . t('Tu ne suis pas cet athlète (ou l’accès a été révoqué).') . '</h2><p class="text-xs text-muted-foreground"><a class="underline" href="?p=coach">' . t('← Retour au roster') . '</a></p></div>';
+        foot(); exit;
+    }
+    $apd = coach_open_db($aid);
+    $a = null;
+    if ($apd) { $stG = $apd->prepare('SELECT * FROM activities WHERE id = ?'); $stG->execute([$actId]); $a = $stG->fetch(); }
+    if (!$a) {
+        echo '<div class="alert" data-variant="destructive"><h2>' . t('Séance introuvable (vue coach).') . '</h2><p class="text-xs text-muted-foreground"><a class="underline" href="?p=coach_athlete&id=' . $aid . '">' . t('← Retour à la fiche') . '</a></p></div>';
+        foot(); exit;
+    }
+
+    /* séries réduites côté serveur (même principe que la page détail : 1 pas, moyennes par bloc) */
+    $S = $a['streams'] ? (json_decode(gzuncompress($a['streams']), true) ?: []) : [];
+    $nStream = stream_length($S);
+    $step = max(1, (int)ceil($nStream / 700));
+    $ds = function (array $x) use ($step): array {
+        $x = clean($x);
+        if ($step === 1) return $x;
+        $o = [];
+        for ($i = 0, $n = count($x); $i < $n; $i += $step) {
+            $c = array_slice($x, $i, $step);
+            $o[] = round(array_sum($c) / count($c), 1);
+        }
+        return $o;
+    };
+    $pwSeries = !empty($S['watts']) ? $ds($S['watts']) : [];
+    $hrSeries = !empty($S['heartrate']) ? $ds($S['heartrate']) : [];
+    $spdSeries = !empty($S['velocity_smooth']) ? array_map(fn($v) => round($v * 3.6, 1), $ds($S['velocity_smooth'])) : [];
+    $altSeries = !empty($S['altitude']) ? $ds($S['altitude']) : [];
+    $nAxis = max(count($pwSeries), count($hrSeries), count($spdSeries), count($altSeries));
+    $xAxis = array_map(fn($i) => round($i * $step / 60, 1), range(0, max(0, $nAxis - 1)));
+
+    /* ftp/lthr de l'ATHLÈTE (sa base) si disponibles → zones / repères */
+    $aFtp = 0.0; $aLthr = 0.0;
+    try {
+        foreach ($apd->query("SELECT k, v FROM settings WHERE k IN ('ftp','lthr')")->fetchAll() as $kv) {
+            if ($kv['k'] === 'ftp') $aFtp = (float)$kv['v'];
+            if ($kv['k'] === 'lthr') $aLthr = (float)$kv['v'];
+        }
+    } catch (\Throwable $e) {}
+    [$laps, $lapSource] = laps_for_view($a, $S, $aFtp);
+    $cmts = coach_comment_list($aid, $actId);
+    ?>
+    <a href="?p=coach_athlete&id=<?= $aid ?>" class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:underline">← <?= t('Fiche athlète') ?></a>
+
+    <?php if (isset($_GET['cmt'])): ?><div class="alert"><h2><?= t('Commentaire envoyé à ton athlète.') ?></h2></div><?php endif; ?>
+    <?php if (isset($_GET['err'])): ?><div class="alert" data-variant="destructive"><h2><?= h((string)$_GET['err']) ?></h2></div><?php endif; ?>
+
+    <div class="card p-5 flex flex-wrap items-center gap-4">
+      <div class="min-w-0 flex-1">
+        <h1 class="truncate text-xl font-bold tracking-tight"><?= h((string)($a['name'] ?: $a['type'])) ?></h1>
+        <p class="text-sm text-muted-foreground"><?= h(substr((string)$a['date'], 0, 10)) ?> · <?= fmt_dur((int)$a['duration']) ?> · <?= $a['distance'] ? n($a['distance'] / 1000, 1) . ' km · ' : '' ?><?= tss_badge($a['tss'] !== null ? (float)$a['tss'] : null, $a['tss_type'] ?? 'power') ?></p>
+      </div>
+      <span class="flex items-center gap-1.5"><?= sport_badge((string)$a['sport'], (string)$a['type']) ?></span>
+    </div>
+
+    <?php if (!$nStream): ?>
+      <div class="alert"><h2><?= t('Pas de streams pour cette séance (aucun fichier importé).') ?></h2></div>
+    <?php else: ?>
+    <div class="card"><section class="p-4 space-y-2">
+      <h3 class="text-sm font-semibold"><?= t('Courbes (puissance / FC / vitesse)') ?></h3>
+      <div class="h-64"><canvas id="caStreams"></canvas></div>
+      <p class="text-xs text-muted-foreground"><?= $aFtp > 0 ? 'FTP de l’athlète : ' . n($aFtp, 0) . ' W · ' . t('LTHR') . ' : ' . n($aLthr, 0) . ' bpm' : t('FTP/LTHR de l’athlète non configurés (chez lui).') ?></p>
+    </section></div>
+
+    <?php if ($laps): ?>
+    <div class="card">
+      <section class="p-4 pb-0"><h3 class="text-sm font-semibold"><?= t('Séquences détectées') ?></h3>
+        <p class="text-xs text-muted-foreground"><?= $lapSource === 'manual' ? t('découpage personnalisé') : ($lapSource === 'icu' ? t('tours de l’appareil') : t('intervalles détectés')) ?></p></section>
+      <div class="table-container border-0"><table class="table">
+        <thead><tr><th>#</th><th><?= t('Séance') ?></th><th><?= t('Durée') ?></th><th><?= t('Dist.') ?></th><th><?= t('Puiss.') ?></th><th>IF</th><th><?= t('FC moy.') ?></th><th><?= t('FC max') ?></th></tr></thead>
+        <tbody>
+        <?php foreach ($laps as $iv): ?>
+          <tr class="<?= !empty($iv['is_work']) ? 'bg-primary/5 font-medium' : '' ?>">
+            <td class="font-bold text-xs"><?= (int)($iv['id'] ?? 0) ?></td>
+            <td><span class="badge" data-variant="<?= !empty($iv['is_work']) ? 'default' : 'outline' ?>"><?= h((string)($iv['label'] ?? (!empty($iv['is_work']) ? 'Effort' : 'Récup'))) ?></span></td>
+            <td class="tabular-nums text-xs"><?= fmt_dur((int)($iv['duration'] ?? 0)) ?></td>
+            <td class="tabular-nums text-xs"><?= !empty($iv['distance']) ? n($iv['distance'] / 1000, 2) . ' km' : '–' ?></td>
+            <td class="tabular-nums text-xs font-semibold"><?= !empty($iv['avg_w']) ? n((float)$iv['avg_w']) . ' W' : '–' ?></td>
+            <td class="tabular-nums text-xs"><?= !empty($iv['if_']) ? n((float)$iv['if_'], 2) : '–' ?></td>
+            <td class="tabular-nums text-xs"><?= !empty($iv['avg_hr']) ? round((float)$iv['avg_hr']) : '–' ?></td>
+            <td class="tabular-nums text-xs"><?= !empty($iv['max_hr']) ? round((float)$iv['max_hr']) : '–' ?></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody></table></div>
+    </div>
+    <?php endif; ?>
+    <?php endif; ?>
+
+    <div class="card">
+      <section class="p-4 pb-0"><h3 class="text-sm font-semibold"><?= t('Commentaires du coach') ?><?= $cmts ? ' (' . count($cmts) . ')' : '' ?></h3></section>
+      <div class="p-4 space-y-2">
+        <?php foreach ($cmts as $cc): ?>
+          <p class="rounded bg-muted/50 px-3 py-2 text-sm"><b><?= h($cc['coach_name']) ?></b> · <span class="text-xs text-muted-foreground"><?= date('d/m/Y H:i', (int)$cc['ts']) ?></span><br><?= h($cc['body']) ?></p>
+        <?php endforeach; ?>
+        <?php if (!$cmts): ?><p class="text-sm text-muted-foreground"><?= t('Aucun commentaire pour l’instant.') ?></p><?php endif; ?>
+        <form method="post" action="?p=coach_activity" class="space-y-2">
+          <input type="hidden" name="coach_cmt_act" value="c">
+          <input type="hidden" name="athlete_id" value="<?= $aid ?>">
+          <input type="hidden" name="activity_id" value="<?= h($actId) ?>">
+          <textarea class="input" name="body" rows="3" maxlength="2000" placeholder="<?= h(t('Un mot pour ton athlète…')) ?>"></textarea>
+          <button class="btn" data-size="sm" type="submit"><?= t('Envoyer') ?></button>
+        </form>
+      </div>
+    </div>
+
+    <?php if ($nStream): ?>
+    <script>
+    (function () {
+      const x = <?= json_encode($xAxis) ?>,
+            pw = <?= json_encode($pwSeries) ?>,
+            hr = <?= json_encode($hrSeries) ?>,
+            spd = <?= json_encode($spdSeries) ?>;
+      if (typeof Chart === 'undefined' || !x.length) return;
+      const D = [
+        { label: 'W', data: pw, yAxisID: 'y', borderColor: '#10b981', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
+        { label: 'bpm', data: hr, yAxisID: 'y1', borderColor: '#f43f5e', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
+        { label: 'km/h', data: spd, yAxisID: 'y1', borderColor: '#3b82f6', borderWidth: 1.5, pointRadius: 0, tension: 0.2 }
+      ].filter(d => d.data.length);
+      new Chart('caStreams', {
+        type: 'line',
+        data: { labels: x, datasets: D },
+        options: { maintainAspectRatio: false, animation: false,
+          plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
+          interaction: { mode: 'index', intersect: false },
+          scales: { x: { ticks: { maxTicksLimit: 10, font: { size: 10 } }, title: { display: true, text: 'min', font: { size: 10 } } },
+            y: { position: 'left', ticks: { font: { size: 10 } }, title: { display: true, text: 'W', font: { size: 10 } } },
+            y1: { position: 'right', grid: { drawOnChartArea: false }, ticks: { font: { size: 10 } }, title: { display: true, text: 'bpm / km/h', font: { size: 10 } } }
+          } }
+      });
+    })();
+    </script>
+    <?php endif; ?>
     <?php foot(); exit;
 }
 

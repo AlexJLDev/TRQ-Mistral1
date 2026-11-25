@@ -436,6 +436,72 @@ function coach_plan_text(string $structureJson, string $mode): string {
     return implode("\n", $out);
 }
 
+/* ---------- commentaires du coach sous les séances de l'athlète ---------- */
+
+function coach_comments_schema(PDO $p): void {
+    try {
+        $p->exec('CREATE TABLE IF NOT EXISTS coach_comments(id INTEGER PRIMARY KEY AUTOINCREMENT, activity_id TEXT, coach_id INTEGER, ts INTEGER, body TEXT)');
+    } catch (\Throwable $e) { /* base absente : rien à faire */ }
+}
+
+/** Ajoute un commentaire du coach sur une séance de l'ATHLÈTE (+ notif dans sa base). */
+function coach_comment_add(int $coachId, int $athleteId, string $activityId, string $body): bool {
+    if (!coach_is_active($coachId, $athleteId)) return false;
+    $body = trim(mb_substr($body, 0, 2000));
+    if ($body === '' || preg_match('/^\d{1,20}$/', $activityId) !== 1) return false;
+    $p = coach_open_db($athleteId);
+    if (!$p) return false;
+    coach_comments_schema($p);
+    try {
+        $chk = $p->prepare('SELECT COUNT(*) FROM activities WHERE id = ?');
+        $chk->execute([$activityId]);
+        if (!(int)$chk->fetchColumn()) return false;   // séance introuvable chez l'athlète
+    } catch (\Throwable $e) { return false; }
+    $p->prepare('INSERT INTO coach_comments(activity_id, coach_id, ts, body) VALUES (?,?,?,?)')
+        ->execute([$activityId, $coachId, time(), $body]);
+    coach_notify_athlete($athleteId, 'coach_comment', 'coach-comment-' . $activityId . '-' . uniqid(),
+        'Ton coach a commenté une séance', mb_substr($body, 0, 160), '?p=activity&id=' . $activityId, 'info');
+    return true;
+}
+
+/** Commentaires d'une séance de l'athlète (avec nom du coach résolu côté auth). $activityId null = tous (200 max). */
+function coach_comment_list(int $athleteId, ?string $activityId = null): array {
+    $p = coach_open_db($athleteId);
+    if (!$p) return [];
+    try {
+        $st = $activityId !== null
+            ? $p->prepare('SELECT id, activity_id, coach_id, ts, body FROM coach_comments WHERE activity_id = ? ORDER BY ts')
+            : $p->prepare('SELECT id, activity_id, coach_id, ts, body FROM coach_comments ORDER BY ts DESC LIMIT 200');
+        $st->execute($activityId !== null ? [$activityId] : []);
+        $rows = $st->fetchAll();
+    } catch (\Throwable $e) { return []; }
+    foreach ($rows as &$r) {
+        try {
+            $u = auth_db()->prepare('SELECT name FROM users WHERE id = ?');
+            $u->execute([(int)$r['coach_id']]);
+            $r['coach_name'] = (string)($u->fetchColumn() ?: 'Coach');
+        } catch (\Throwable $e) { $r['coach_name'] = 'Coach'; }
+    }
+    return $rows;
+}
+
+/** Commentaires sur UNE séance — côté ATHLÈTE sur sa propre page (base courante, table créée initialement par le coach). */
+function coach_comments_current(string $activityId): array {
+    try {
+        $st = db()->prepare('SELECT id, coach_id, ts, body FROM coach_comments WHERE activity_id = ? ORDER BY ts');
+        $st->execute([$activityId]);
+    } catch (\Throwable $e) { return []; }
+    $rows = $st->fetchAll();
+    foreach ($rows as &$r) {
+        try {
+            $u = auth_db()->prepare('SELECT name FROM users WHERE id = ?');
+            $u->execute([(int)$r['coach_id']]);
+            $r['coach_name'] = (string)($u->fetchColumn() ?: 'Coach');
+        } catch (\Throwable $e) { $r['coach_name'] = 'Coach'; }
+    }
+    return $rows;
+}
+
 /** Bibliothèque de séances structurées du coach (sa propre base) — légende + structures pour le select de planification. */
 function coach_library(int $coachId, int $limit = 50): array {
     try {
