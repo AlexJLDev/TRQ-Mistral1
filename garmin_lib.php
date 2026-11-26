@@ -44,14 +44,50 @@ const GARMIN_API_BASE      = 'https://apis.garmin.com';
 const GARMIN_WEBHOOK_ACK   = '{"response": "ACKNOWLEDGED"}';
 
 /** Identifiants OAuth de l'APPLICATION (délivrés une seule fois sur le portail développeur Garmin) :
-    réglage global d'abord (gcfg, partagé par tous les comptes), repli sur le réglage utilisateur
-    (installations existantes où les clés ont été saisies dans la carte Paramètres d'un compte). */
+    réglage global d'abord (gcfg, partagé par tous les comptes). AUTO-MIGRATION : tant que le
+    global est vide, les clés saisies dans une base utilisateur (installations antérieures) sont
+    promues en global à la première utilisation — y compris déclenchée par un NOUVEAU compte
+    (scan des bases, comme pour le webhook). Écriture idempotente, aucune re-saisie nécessaire. */
 function garmin_client_creds(): array {
     $id = trim((string)gcfg('garmin_client_id', ''));
-    if ($id === '') $id = trim((string)cfg('garmin_client_id', ''));
     $sec = trim((string)gcfg('garmin_client_secret', ''));
-    if ($sec === '') $sec = trim((string)cfg('garmin_client_secret', ''));
+    if ($id === '' || $sec === '') {
+        try {                                                            // 1) cfg du compte courant (peut échouer hors session)
+            $uid = trim((string)cfg('garmin_client_id', ''));
+            $usec = trim((string)cfg('garmin_client_secret', ''));
+            if ($id === '' && $uid !== '') { $id = $uid; gcfg_set('garmin_client_id', $uid); }
+            if ($sec === '' && $usec !== '') { $sec = $usec; gcfg_set('garmin_client_secret', $usec); }
+        } catch (Throwable $e) {}
+        if ($id === '' || $sec === '') {
+            garmin_migrate_app_creds();                                  // 2) scan des bases (autre compte)
+            $id = trim((string)gcfg('garmin_client_id', ''));
+            $sec = trim((string)gcfg('garmin_client_secret', ''));
+        }
+    }
     return [$id, $sec];
+}
+
+/** Cherche les clés Garmin dans les bases utilisateurs (installation antérieure : clés dans le
+    cfg d'un compte) et les promeut en réglage global. Appelé seulement tant que le global est vide. */
+function garmin_migrate_app_creds(): void {
+    $paths = glob(data_dir() . '/users/u*.sqlite') ?: [];
+    $mono = data_dir() . '/app.sqlite';
+    if (is_file($mono)) $paths[] = $mono;
+    foreach (array_slice($paths, 0, 100) as $p) {
+        $pdo = garmin_open_db($p);
+        if (!$pdo) continue;
+        try {
+            $id = trim((string)$pdo->query("SELECT v FROM settings WHERE k='garmin_client_id'")->fetchColumn());
+            if ($id === '') continue;
+            $sec = trim((string)$pdo->query("SELECT v FROM settings WHERE k='garmin_client_secret'")->fetchColumn());
+            if ($sec === '') continue;
+            $plain = dec_secret($sec);                                   // tolérant : '' si illisible
+            if ($plain === '') continue;                                 // ne pas propager une valeur corrompue
+            gcfg_set('garmin_client_id', $id);
+            gcfg_set('garmin_client_secret', $plain);
+            return;
+        } catch (Throwable $e) {}
+    }
 }
 
 /**
@@ -100,7 +136,25 @@ function garmin_redirect_uri_url_base(): string {
 /** URL du webhook push à enregistrer dans le portail Garmin (token inclus). */
 function garmin_webhook_uri(): string {
     $tok = trim((string)gcfg('garmin_webhook_token', ''));
-    if ($tok === '') $tok = trim((string)cfg('garmin_webhook_token', ''));
+    if ($tok === '') {
+        /* Auto-migration : promeut le jeton utilisateur existant (URL déjà enregistrée dans le
+           portail Garmin) au lieu d'en générer un nouveau qui casserait le push. */
+        try { $tok = trim((string)cfg('garmin_webhook_token', '')); } catch (Throwable $e) {}
+        if ($tok === '') {                                               // jeton posé dans une AUTRE base utilisateur
+            $paths = glob(data_dir() . '/users/u*.sqlite') ?: [];
+            $mono = data_dir() . '/app.sqlite';
+            if (is_file($mono)) $paths[] = $mono;
+            foreach (array_slice($paths, 0, 100) as $p) {
+                $pdo2 = garmin_open_db($p);
+                if (!$pdo2) continue;
+                try {
+                    $t = trim((string)$pdo2->query("SELECT v FROM settings WHERE k='garmin_webhook_token'")->fetchColumn());
+                    if ($t !== '') { $tok = $t; break; }
+                } catch (Throwable $e) {}
+            }
+        }
+        if ($tok !== '') gcfg_set('garmin_webhook_token', $tok);
+    }
     if ($tok === '') { $tok = bin2hex(random_bytes(24)); gcfg_set('garmin_webhook_token', $tok); }
     return garmin_redirect_uri_url_base() . '/garmin_webhook.php?token=' . $tok;
 }
