@@ -457,14 +457,22 @@ function coach_icu_native_text(string $structureJson, string $mode): string {
         $suffix = $k === 'warmup' ? ' Warmup' : ($k === 'cooldown' ? ' Cooldown' : '');
         return '- ' . $dur((int)($s['dur'] ?? 60)) . ' ' . $rng($s) . $suffix . (!empty($s['ramp']) ? ' ramp' : '');
     };
-    $out = [];
+    /* Format ICU : groupes séparés par une ligne VIDE ; le nombre de répétitions est sur
+       une ligne SANS tiret ('2x') suivie des lignes d'étapes '- …' (ex. forum t/63624). */
+    $groups = [];
+    $cur = [];
     foreach ($st as $b) {
         if (isset($b['steps']) && is_array($b['steps'])) {
-            $out[] = '- ' . max(1, (int)($b['reps'] ?? 1)) . 'x';
-            foreach ($b['steps'] as $c) $out[] = $one((array)$c);
-        } else $out[] = $one((array)$b);
+            if ($cur) { $groups[] = $cur; $cur = []; }
+            $cur[] = max(1, (int)($b['reps'] ?? 1)) . 'x';
+            foreach ($b['steps'] as $c) $cur[] = $one((array)$c);
+        } else {
+            if ($cur) { $groups[] = $cur; $cur = []; }
+            $cur[] = $one((array)$b);
+        }
     }
-    return implode("\n", $out);
+    if ($cur) $groups[] = $cur;
+    return implode("\n\n", array_map(fn($g) => implode("\n", $g), $groups));
 }
 
 /* ---------- commentaires du coach sous les séances de l'athlète ---------- */
