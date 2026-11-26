@@ -228,7 +228,7 @@ function garmin_disconnect(): void {
    ================================================================================ */
 
 /** TRQ sport → énum sport Training API v2 (RUNNING, CYCLING, LAP_SWIMMING). */
-function garmin_sport_map(string $sport, string $tssType = 'power'): array {
+function garmin_sport_map(string $sport, string $tssType = 'power'): string {
     return match ((string)($sport === '' ? 'ride' : $sport)) {
         'run'   => 'RUNNING',
         'swim'  => 'LAP_SWIMMING',
