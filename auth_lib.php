@@ -41,9 +41,31 @@ function auth_db(): PDO {
             role TEXT NOT NULL DEFAULT 'user', active INTEGER NOT NULL DEFAULT 1, created_at TEXT, last_login TEXT);
         CREATE TABLE IF NOT EXISTS auth_events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, ip TEXT, email TEXT, at INTEGER);
         CREATE INDEX IF NOT EXISTS idx_auth_events ON auth_events(kind, at);
-        CREATE TABLE IF NOT EXISTS password_resets(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, token_hash TEXT UNIQUE, expires_at INTEGER, used INTEGER DEFAULT 0);");
+        CREATE TABLE IF NOT EXISTS password_resets(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, token_hash TEXT UNIQUE, expires_at INTEGER, used INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS app_cfg(k TEXT PRIMARY KEY, v TEXT);");
+        foreach (['ALTER TABLE users ADD COLUMN avatar BLOB', 'ALTER TABLE users ADD COLUMN avatar_mime TEXT', 'ALTER TABLE users ADD COLUMN avatar_ts INTEGER'] as $m) {
+            try { $p->exec($m); } catch (\Throwable $e) { }
+        }
     }
     return $p;
+}
+
+/* ---------- réglages GLOBAUX de l'application (auth.sqlite, partagés par tous les comptes) ----------
+   Pour les identifiants d'application (ex. client_id/client_secret Garmin délivrés à TRQ sur le
+   portail développeur) : ils ne doivent être saisis qu'une fois, pas par chaque utilisateur.
+   Le secret est chiffré comme pour cfg() (AES-256-GCM, clé data/app.key). */
+function gcfg(string $k, $default = null) {
+    $st = auth_db()->prepare('SELECT v FROM app_cfg WHERE k=?');
+    $st->execute([$k]);
+    $v = $st->fetchColumn();
+    if (is_string($v) && $k === 'garmin_client_secret' && $v !== '') {
+        try { $v = dec_secret($v); } catch (Throwable $e) {}
+    }
+    return ($v === false || $v === '') ? $default : $v;
+}
+function gcfg_set(string $k, string $v): void {
+    if ($k === 'garmin_client_secret' && $v !== '') $v = enc_secret($v);
+    auth_db()->prepare('INSERT INTO app_cfg(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v')->execute([$k, $v]);
 }
 
 function db_path(): string {
@@ -277,6 +299,19 @@ function auth_reset_password(string $token, string $pw, string $pw2): ?string {
     auth_db()->prepare('UPDATE users SET pass_hash=? WHERE id=?')->execute([pw_hash($pw), $u['id']]);
     auth_db()->prepare('UPDATE password_resets SET used=1 WHERE user_id=?')->execute([$u['id']]);
     return null;
+}
+
+/** Lien de réinitialisation généré par un administrateur (valable 24 h) : un seul lien actif par compte, le lien est aussi envoyé par e-mail en best effort. */
+function auth_admin_reset_link(int $uid): array {
+    $st = auth_db()->prepare('SELECT * FROM users WHERE id=? AND active=1'); $st->execute([$uid]); $u = $st->fetch();
+    if (!$u) return ['ok' => false, 'error' => 'Compte introuvable ou désactivé.'];
+    auth_db()->prepare('UPDATE password_resets SET used=1 WHERE user_id=?')->execute([$uid]);
+    $token = bin2hex(random_bytes(32));
+    auth_db()->prepare('INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (?,?,?)')->execute([$uid, hash('sha256', $token), time() + 86400]);
+    $link = base_url() . '/login.php?a=reset&token=' . $token;
+    $mail = send_mail((string)$u['email'], 'TRQ – Réinitialisation de votre mot de passe',
+        "Bonjour " . $u['name'] . ",\n\nUn administrateur a demandé la réinitialisation de votre mot de passe.\nPour en choisir un nouveau, ouvrez ce lien (valable 24 heures) :\n" . $link . "\n\nSi vous n'êtes pas à l'origine de cette demande, contactez l'administrateur.\n\n— TRQ\n");
+    return ['ok' => true, 'link' => $link, 'mail' => $mail];
 }
 
 /* ---------- compte ---------- */

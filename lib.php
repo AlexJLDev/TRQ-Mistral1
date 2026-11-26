@@ -1,9 +1,12 @@
 <?php
 require_once __DIR__ . '/auth_lib.php';
+require_once __DIR__ . '/lang.php';
 require_once __DIR__ . '/diagnostic.php';
 require_once __DIR__ . '/plan_compare.php';
 require_once __DIR__ . '/nutrition_lib.php';
 require_once __DIR__ . '/progress_lib.php';
+require_once __DIR__ . '/coach_lib.php';
+require_once __DIR__ . '/garmin_lib.php';
 
 const DB_FILE = __DIR__ . '/data/app.sqlite';
 const MMP_DURS = [1, 5, 10, 15, 30, 60, 120, 180, 300, 600, 1200, 1800, 3600, 5400, 7200];
@@ -109,12 +112,36 @@ function db(): PDO {
         );
         CREATE INDEX IF NOT EXISTS idx_plan_date ON planned_workouts(date);
 
+        CREATE TABLE IF NOT EXISTS calendar_notes(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            start_date TEXT,
+            end_date TEXT,
+            type TEXT,
+            label TEXT,
+            notes TEXT,
+            created_at INTEGER
+        );
+
         CREATE TABLE IF NOT EXISTS workouts(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT, sport TEXT DEFAULT 'ride', mode TEXT DEFAULT 'power', unit TEXT DEFAULT 'pct',
             structure TEXT, profile TEXT, duration INTEGER DEFAULT 0, tss REAL DEFAULT 0, if_ REAL,
             notes TEXT, created_at TEXT, updated_at TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS notifications(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER,
+            type TEXT,
+            ref TEXT,
+            level TEXT DEFAULT 'info',
+            title TEXT,
+            body TEXT,
+            link TEXT,
+            read_at INTEGER
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_notif_ref ON notifications(type, ref);
+        CREATE INDEX IF NOT EXISTS idx_notif_ts ON notifications(ts);
         ");
 
         // Assurer la présence des colonnes optionnelles si table préexistante
@@ -128,6 +155,7 @@ function db(): PDO {
         if (!in_array('custom_laps', $cols, true)) $pdo->exec("ALTER TABLE activities ADD COLUMN custom_laps TEXT");
         if (!in_array('rpe', $cols, true)) $pdo->exec("ALTER TABLE activities ADD COLUMN rpe INTEGER");
         if (!in_array('feel', $cols, true)) $pdo->exec("ALTER TABLE activities ADD COLUMN feel TEXT");
+        if (!in_array('name_custom', $cols, true)) $pdo->exec("ALTER TABLE activities ADD COLUMN name_custom INTEGER DEFAULT 0");
         $pcols = array_column($pdo->query("PRAGMA table_info(planned_workouts)")->fetchAll(), 'name');
         foreach (['structure' => 'TEXT', 'profile' => 'TEXT', 'workout_id' => 'INTEGER', 'icu_event_id' => 'TEXT', 'icu_text' => 'TEXT', 'activity_id' => 'TEXT', 'cmp_key' => 'TEXT', 'cmp_json' => 'TEXT'] as $c => $t)
             if (!in_array($c, $pcols, true)) $pdo->exec("ALTER TABLE planned_workouts ADD COLUMN $c $t");
@@ -160,13 +188,63 @@ function cfg(string $k, $default = null) {
     $st = db()->prepare('SELECT v FROM settings WHERE k=?');
     $st->execute([$k]);
     $v = $st->fetchColumn();
-    if ($k === 'api_key' && is_string($v)) $v = dec_secret($v);
+    if (is_string($v) && in_array($k, ['api_key', 'garmin_client_secret', 'garmin_access_token', 'garmin_refresh_token'], true)) $v = dec_secret($v);
     return ($v === false || $v === '') ? $default : $v;
 }
 
 function cfg_set(string $k, string $v): void {
-    if ($k === 'api_key') $v = enc_secret($v);
+    if (in_array($k, ['api_key', 'garmin_client_secret', 'garmin_access_token', 'garmin_refresh_token'], true)) $v = enc_secret($v);
     db()->prepare('INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v')->execute([$k, $v]);
+}
+
+/* ---------- photo de profil (BLOB dans auth.sqlite, servie par ?p=avatar) ---------- */
+
+/** Infos (mime, horodatage) de la photo de l'utilisateur connecté — null si aucune. */
+function avatar_info(): ?array {
+    static $r = false;
+    if ($r === false) {
+        $r = null;
+        try {
+            if (auth_enabled() && current_uid() > 0) {
+                $st = auth_db()->prepare('SELECT avatar_mime, avatar_ts FROM users WHERE id=?');
+                $st->execute([current_uid()]);
+                $row = $st->fetch();
+                if ($row && $row['avatar_ts']) $r = ['mime' => (string)$row['avatar_mime'], 'ts' => (int)$row['avatar_ts']];
+            }
+        } catch (\Throwable $e) { $r = null; }
+    }
+    return $r;
+}
+
+/** Valide et retaille l'image envoyée (carré 256px si GD dispo), renvoie [bytes, mime] ou lance RuntimeException. */
+function avatar_process(array $f): array {
+    if (($f['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) throw new RuntimeException('Envoi du fichier impossible (trop gros ou requête interrompue).');
+    if ($f['size'] > 4194304) throw new RuntimeException('Image trop lourde (4 Mo max).');
+    $bin = @file_get_contents($f['tmp_name']);
+    $info = $bin === false ? null : @getimagesizefromstring($bin);
+    if (!$info || !in_array($info['mime'], ['image/jpeg', 'image/png', 'image/webp', 'image/gif'], true)) throw new RuntimeException('Fichier non reconnu comme une image (JPEG, PNG, WebP ou GIF).');
+    $mime = $info['mime'];
+    if (!function_exists('imagecreatetruecolor') || $mime === 'image/gif') return [$bin, $mime];   // GIF animé ou absent de GD : original conservé
+    $src = @imagecreatefromstring($bin);
+    if (!$src) return [$bin, $mime];
+    $w = imagesx($src); $h = imagesy($src);
+    if ($w === 256 && $h === 256) { imagedestroy($src); return [$bin, $mime]; }
+    $side = min($w, $h); $sx = (int)floor(($w - $side) / 2); $sy = (int)floor(($h - $side) / 2);
+    $dst = imagecreatetruecolor(256, 256);
+    if (in_array($mime, ['image/png', 'image/webp'], true)) {
+        imagealphablending($dst, false); imagesavealpha($dst, true);
+        imagefilledrectangle($dst, 0, 0, 256, 256, imagecolorallocatealpha($dst, 0, 0, 0, 127));
+    }
+    imagecopyresampled($dst, $src, 0, 0, $sx, $sy, 256, 256, $side, $side);
+    imagedestroy($src);
+    ob_start();
+    if ($mime === 'image/png') imagepng($dst, null, 6);
+    elseif ($mime === 'image/webp' && function_exists('imagewebp')) imagewebp($dst, null, 88);
+    else { imagejpeg($dst, null, 86); $mime = 'image/jpeg'; }
+    imagedestroy($dst);
+    $out = (string)ob_get_clean();
+    if ($out === '') return [$bin, $info['mime']];
+    return [$out, $mime];
 }
 
 /* ---------- intervals.icu API ---------- */
@@ -1192,14 +1270,43 @@ function workout_save(array $d): int {
 function push_planned_to_icu(int $planId): string {
     $st = db()->prepare('SELECT * FROM planned_workouts WHERE id=?'); $st->execute([$planId]); $p = $st->fetch();
     if (!$p) throw new RuntimeException('Séance planifiée introuvable.');
-    if (trim((string)($p['icu_text'] ?? '')) === '') throw new RuntimeException("Cette séance n'a pas de description structurée à envoyer (créée hors du builder).");
-    $ev = icu_send('POST', '/athlete/' . athlete_id() . '/events', [
-        'category' => 'WORKOUT', 'start_date_local' => $p['date'] . 'T00:00:00', 'type' => $p['sport'] === 'run' ? 'Run' : 'Ride',
-        'name' => $p['title'], 'description' => (string)$p['icu_text'], 'moving_time' => (int)$p['duration'], 'uid' => 'cyclolab-plan-' . $planId,
-    ], ['upsertOnUid' => 'true']);
+    if (trim((string)($p['icu_text'] ?? '')) === '' && trim((string)($p['structure'] ?? '')) === '') throw new RuntimeException("Cette séance n'a pas de description structurée à envoyer (créée hors du builder).");
+    /* Format natif intervals.icu (affichage structuré avec graphe) généré depuis la structure TRQ ; repli : le texte existant. */
+    $native = coach_icu_native_text((string)($p['structure'] ?? ''), ($p['tss_type'] ?? '') === 'hrtss' ? 'hr' : 'power');
+    $desc = trim($native) !== '' ? $native : (string)$p['icu_text'];
+    $body = [
+        'category' => 'WORKOUT', 'start_date_local' => $p['date'] . 'T00:00:00',
+        'type' => $p['sport'] === 'run' ? 'Run' : (($p['sport'] ?? '') === 'swim' ? 'Swim' : 'Ride'),
+        'name' => $p['title'], 'description' => $desc, 'moving_time' => (int)$p['duration'], 'uid' => 'cyclolab-plan-' . $planId,
+    ];
+    if (($p['tss_type'] ?? '') === 'power') $body['target'] = 'POWER';
+    if ((int)$p['tss'] > 0) $body['icu_training_load'] = (int)$p['tss'];
+    $ev = icu_send('POST', '/athlete/' . athlete_id() . '/events', $body, ['upsertOnUid' => 'true']);
     $eid = (string)($ev['id'] ?? '');
     db()->prepare('UPDATE planned_workouts SET icu_event_id=? WHERE id=?')->execute([$eid !== '' ? $eid : 'ok', $planId]);
     return $eid;
+}
+
+/**
+ * Envoi AUTOMATIQUE d'une séance planifiée structurée vers intervals.icu + Garmin Connect.
+ * Non bloquant (chaque cible attrape ses erreurs) et silencieux si la cible n'est pas connectée.
+ * intervals.icu : upsert par uid → aucun doublon même en renvoyant.
+ * Garmin : première séance du même jour déjà poussée → ignorée (garde garmin_pushed).
+ * Renvoie une liste [{ok, target, error?}].
+ */
+function auto_push_planned(int $planId): array {
+    $out = [];
+    /* intervals.icu — seulement si la clé API est en place */
+    if (trim((string)cfg('api_key', '')) !== '') {
+        try { push_planned_to_icu($planId); $out[] = ['ok' => true, 'target' => 'intervals.icu']; }
+        catch (Throwable $e) { $out[] = ['ok' => false, 'target' => 'intervals.icu', 'error' => $e->getMessage()]; }
+    }
+    /* Garmin Connect — seulement si le compte est relié */
+    if (function_exists('garmin_status') && garmin_status()['connected']) {
+        try { garmin_push_workout($planId); $out[] = ['ok' => true, 'target' => 'Garmin']; }
+        catch (Throwable $e) { $out[] = ['ok' => false, 'target' => 'Garmin', 'error' => $e->getMessage()]; }
+    }
+    return $out;
 }
 
 /** Planifie au calendrier ; envoie aussi à intervals.icu si demandé (l'échec de l'envoi n'annule pas la planification). */
@@ -1209,12 +1316,8 @@ function workout_plan(array $d): array {
     db()->prepare('INSERT INTO planned_workouts (date, sport, title, duration, distance, tss, tss_type, notes, structure, profile, workout_id, icu_text) VALUES (?,?,?,?,0,?,?,?,?,?,?,?)')
         ->execute([$date, $w['sport'], $w['name'], $w['duration'], $w['tss'], $w['mode'] === 'hr' ? 'hrtss' : 'power', $w['notes'], $w['structure'], $w['profile'], (int)($d['workout_id'] ?? 0) ?: null, mb_substr((string)($d['text'] ?? ''), 0, 20000)]);
     $planId = (int)db()->lastInsertId();
-    $res = ['planned_id' => $planId, 'icu' => null];
-    if (!empty($d['push'])) {
-        try { $res['icu'] = ['ok' => true, 'id' => push_planned_to_icu($planId)]; }
-        catch (Throwable $e) { $res['icu'] = ['ok' => false, 'error' => $e->getMessage()]; }
-    }
-    return $res;
+    /* Envoi automatique vers intervals.icu + Garmin (auparavant : case à cocher, ICU seulement) */
+    return ['planned_id' => $planId, 'icu' => null, 'push' => auto_push_planned($planId)];
 }
 
 function process_activity(array $row): void {
@@ -1702,3 +1805,117 @@ function fmt_dur_full(int $s): string {
 function fmt_label(int $s): string {
     return $s < 60 ? "{$s}s" : ($s < 3600 ? intdiv($s, 60) . 'min' : round($s / 3600, 1) . 'h');
 }
+
+/* ---------- Notifications in-app ---------- */
+
+/** Ajoute (ou restimule) une notification — dédoublonnée par (type, ref). */
+function notif_add(string $type, string $ref, string $title, string $body = '', string $link = '', string $level = 'info'): void {
+    db()->prepare('INSERT INTO notifications(ts, type, ref, level, title, body, link, read_at)
+        VALUES (?,?,?,?,?,?,?,NULL)
+        ON CONFLICT(type, ref) DO UPDATE SET
+            ts = excluded.ts, level = excluded.level, title = excluded.title,
+            body = excluded.body, link = excluded.link, read_at = NULL')
+        ->execute([time(), $type, $ref, $level, $title, $body, $link]);
+}
+
+function notif_latest(int $limit = 40): array {
+    return db()->query('SELECT id, ts, type, level, title, body, link, read_at FROM notifications ORDER BY ts DESC, id DESC LIMIT ' . max(1, min(200, $limit)))->fetchAll();
+}
+
+function notif_unread(): int {
+    return (int)db()->query('SELECT COUNT(*) FROM notifications WHERE read_at IS NULL')->fetchColumn();
+}
+
+function notif_read_id(int $id): void {
+    db()->prepare('UPDATE notifications SET read_at = ' . time() . ' WHERE id = ? AND read_at IS NULL')->execute([max(0, $id)]);
+}
+
+function notif_read_all(): void {
+    db()->exec('UPDATE notifications SET read_at = ' . time() . ' WHERE read_at IS NULL');
+}
+
+/** Purge des notifications de plus de 6 mois. */
+function notif_gc(): void {
+    db()->exec('DELETE FROM notifications WHERE ts < ' . (time() - 182 * 86400));
+}
+
+/** Libellé humain d'une durée de meilleur effort (5 → 5 s, 300 → 5 min, 1200 → 20 min). */
+function notif_dur_label(int $s): string {
+    return $s < 60 ? sprintf(t('%d s'), $s) : sprintf(t('%d min'), intdiv($s, 60));
+}
+
+/** Génère les notifications d'analyse (alertes, objectifs, records, rappels) — throttlé 30 min via cfg(notif_gen). */
+function notif_generate(): void {
+    if (time() - (int)cfg('notif_gen', 0) < 1800) return;
+    cfg_set('notif_gen', (string)time());
+    try { notif_gc(); } catch (Throwable $e) {}
+
+    /* 1. Alertes de surmenage (progress_lib) — refé/Data du jour pour permettre une réévaluation quotidienne */
+    try {
+        foreach (progress_alerts() as $a) {
+            $lvl = ($a['sev'] ?? 'info') === 'bad' ? 'crit' : (($a['sev'] ?? 'info') === 'warn' ? 'warn' : 'info');
+            notif_add('alert', 'alert-' . $lvl . '-' . md5((string)$a['title']) . '-' . date('Ymd'), (string)t($a['title']), (string)t($a['msg']), '?p=progress&alert=1', $lvl);
+        }
+    } catch (Throwable $e) {}
+
+    /* 2. Objectifs hebdomadaires : atteint / en retard */
+    try {
+        $gs = progress_goal_status();
+        if (!empty($gs['goals_set']) && $gs['goal_tss'] > 0) {
+            $pct = $gs['total_tss'] / $gs['goal_tss'];
+            if ($pct >= 1) {
+                notif_add('goal', 'goal-done-' . $gs['week_monday'], t('Objectif de la semaine atteint'),
+                    sprintf(t('%s TSS sur %s visés.'), n($gs['total_tss']), n($gs['goal_tss'])), '?p=progress&alert=1', 'good');
+            } elseif ((int)date('N') >= 4 && $pct < 0.55) {
+                notif_add('goal', 'goal-late-' . $gs['week_monday'], t('Objectif de la semaine en retard'),
+                    sprintf(t('%s TSS sur %s visés — prévois une séance pour rester dans la cible.'), n($gs['total_tss']), n($gs['goal_tss'])), '?p=progress&alert=1', 'warn');
+            }
+        }
+    } catch (Throwable $e) {}
+
+    /* 3. Records personnels — compare au snapshot cfg(pr_notif_snap) ; premier passage sans notif */
+    try {
+        $prs = progress_prs();
+        $flat = [];
+        foreach (($prs['pw'] ?? []) as $d => $r) if (($r['val'] ?? 0) > 0) $flat["pw-$d"] = $r;
+        foreach (($prs['hr'] ?? []) as $d => $r) if (($r['val'] ?? 0) > 0) $flat["hr-$d"] = $r;
+        $snap = json_decode((string)cfg('pr_notif_snap', ''), true) ?: [];
+        foreach ($flat as $k => $r) {
+            $old = $snap[$k] ?? null;
+            if (is_array($old) && (float)$r['val'] > (float)($old['val'] ?? 0) + 0.01) {
+                $isPw = str_starts_with($k, 'pw-');
+                $unit = $isPw ? t('W') : t('bpm');
+                notif_add('pr', 'pr-' . $k, t('Nouveau record personnel'),
+                    sprintf(t('%s %s sur %s — %s'), n((float)$r['val']), $unit, notif_dur_label((int)substr($k, 3)), $r['name'] ?: t('Séance')),
+                    '?p=activity&id=' . urlencode((string)($r['act_id'] ?? '')), 'good');
+            }
+            $snap[$k] = ['val' => (float)$r['val']];
+        }
+        if ($flat) cfg_set('pr_notif_snap', json_encode($snap));
+    } catch (Throwable $e) {}
+
+    /* 4. Rappel de séance planifiée (aujourd'hui / demain) */
+    try {
+        $tom = date('Y-m-d', strtotime('+1 day'));
+        $today = date('Y-m-d');
+        $st = db()->prepare("SELECT id, date, title, ROUND(tss) tss FROM planned_workouts WHERE completed=0 AND substr(date,1,10) IN (?, ?) ORDER BY date");
+        $st->execute([$today, $tom]);
+        foreach ($st->fetchAll() as $w) {
+            $when = substr($w['date'], 0, 10) === $today ? t('aujourd\'hui') : t('demain');
+            notif_add('plan', 'plan-' . $w['id'] . '-' . substr($w['date'], 0, 10), t('Séance planifiée'),
+                sprintf(t('%s le %s — %s TSS'), $when, date('d/m', strtotime($w['date'])), n((float)$w['tss'])), '?p=calendar', 'info');
+        }
+    } catch (Throwable $e) {}
+
+    /* 5. Données wellness manquantes (HRV / FC repos jamais synchronisées depuis > 2 jours) */
+    try {
+        $last = db()->query("SELECT MAX(date) FROM wellness WHERE hrv IS NOT NULL OR resting_hr IS NOT NULL")->fetchColumn();
+        if (!$last || strtotime(substr((string)$last, 0, 10)) < strtotime('-2 days')) {
+            notif_add('well', 'well-missing-' . date('Y-m-d'), t('Données de récupération manquantes'),
+                t('HRV / FC repos non synchronisés depuis plus de 2 jours — vérifie la connexion wellness (intervals.icu).'), '?p=wellness', 'info');
+        }
+    } catch (Throwable $e) {}
+}
+
+/* ---------- i18n : filtre de sortie traduit le HTML des pages (index, login) ---------- */
+ob_start('trq_translate_html');
