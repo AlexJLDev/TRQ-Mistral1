@@ -198,9 +198,9 @@ function garmin_permissions(): array {
 function garmin_probe_training(): array {
     $out = [];
     foreach ([
+        '/training-api/workout',
         '/training-api/api/v2/workout',
         '/training-api/api/v2/workouts?limit=1',
-        '/training-api/workout',
         '/training-api/api/v1/workout',
     ] as $p) {
         try {
@@ -209,6 +209,13 @@ function garmin_probe_training(): array {
         } catch (Throwable $e) {
             $out[$p] = mb_substr($e->getMessage(), 0, 200);
         }
+    }
+    /* POST de routage totalement inoffensif : id 0 n'existe pas → 404/400 = route OK, RouteFailed = route morte. */
+    try {
+        garmin_api('POST', '/training-api/workout/0/schedule', ['calendarDate' => date('Y-m-d')]);
+        $out['POST /training-api/workout/0/schedule'] = 'OK (inattendu)';
+    } catch (Throwable $e) {
+        $out['POST /training-api/workout/0/schedule'] = mb_substr($e->getMessage(), 0, 200);
     }
     return $out;
 }
