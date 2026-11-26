@@ -326,6 +326,8 @@ function garmin_build_workout(array $plan): array {
     }
     return [
         'workoutName'             => trim((string)($plan['title'] ?? 'Séance TRQ')),
+        /* Les DEUX sont requis : 'sport' (énum) vu par le validateur, 'sportType' (objet) par le modèle */
+        'sport'                   => strtoupper($sportKey),
         'sportType'               => $sportType,
         'estimatedDurationInSecs' => max(60, $est),
         'workoutSegments'         => [['segmentOrder' => 1, 'sportType' => $sportType, 'workoutSteps' => garmin_structure_to_steps($struct, $sportKey)]],
