@@ -95,15 +95,19 @@ function garmin_status(): array {
     ];
 }
 
-/** URL d'autorisation à ouvrir dans le navigateur (start du flux OAuth 2.0 + PKCE). */
-function garmin_authorize_url(): string {
+/**
+ * URL d'autorisation à ouvrir dans le navigateur (start du flux OAuth 2.0 + PKCE).
+ * $popup=true → le mode pop-up est transporté via un préfixe du state ('p'…/ 'r'…),
+ * ce qui permet au callback de savoir s'il doit fermer la fenêtre (pop-up) ou rediriger.
+ */
+function garmin_authorize_url(bool $popup = false): string {
     [, $challenge] = garmin_pkce_pair();
     return GARMIN_SSO_AUTHORIZE . '?' . http_build_query([
         'response_type'         => 'code',
         'client_id'             => (string)cfg('garmin_client_id', ''),
         'redirect_uri'          => garmin_redirect_uri(),
         'scope'                 => 'ACTIVITY_EXPORT HEALTH_EXPORT WORKOUT_IMPORT',
-        'state'                 => bin2hex(random_bytes(8)),
+        'state'                 => ($popup ? 'p' : 'r') . bin2hex(random_bytes(8)),
         'code_challenge'        => $challenge,
         'code_challenge_method' => 'S256',
     ]);

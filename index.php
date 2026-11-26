@@ -6829,9 +6829,10 @@ if ($p === 'settings') {
             </ul>
           </details>
 
-          <div>
+          <div class="flex items-center gap-3 flex-wrap">
             <?php if ($gs['configured']): ?>
-            <a class="btn" href="oauth_garmin.php">Connecter mon compte Garmin</a>
+            <button type="button" class="btn" id="garminConnectBtn">Connecter mon compte Garmin</button>
+            <a class="text-xs text-muted-foreground underline decoration-dotted" href="oauth_garmin.php" target="_blank" rel="noopener">ou ouvrir dans un nouvel onglet</a>
             <?php elseif (!auth_enabled() || (($cu['role'] ?? '') === 'admin')): ?>
             <a class="btn" data-variant="outline" href="oauth_garmin.php">Voir l'état de la connexion</a>
             <?php endif; ?>
@@ -6867,6 +6868,12 @@ if ($p === 'settings') {
           const gwu = document.getElementById('garminWebhookUri');
           gwu?.addEventListener('click', async () => {
             try { await navigator.clipboard.writeText(gwu.textContent.trim()); gwu.title = '✓ copié'; } catch (e) {}
+          });
+          /* Connexion Garmin : pop-up classique (fenêtre Garmin + autorisation, fermeture auto).
+             Si le navigateur bloque les pop-ups → repli en onglet classique. */
+          document.getElementById('garminConnectBtn')?.addEventListener('click', () => {
+            const w = window.open('oauth_garmin.php?popup=1', 'garminOauth', 'width=520,height=760,menubar=no,toolbar=no');
+            if (!w) location.href = 'oauth_garmin.php';
           });
         })();
         </script>
