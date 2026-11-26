@@ -328,20 +328,84 @@ function garmin_push_workout(int $planId): array {
     $payload = garmin_build_workout(is_array($plan) ? $plan : []);
     $day = substr((string)$plan['date'], 0, 10);
     $gid = '';
+    $sid = '';
+    $pushed = json_decode((string)cfg('garmin_pushed', '{}'), true) ?: [];
+    $prevGid = (string)($pushed[$planId]['gid'] ?? ($pushed[$planId]['gid'] ?? ''));
+    $oldSid = (string)($pushed[$planId]['sid'] ?? '');
     try {
-        $created = garmin_api('POST', '/workoutportal/workout/v2', $payload);
-        $gid = (string)($created['workoutId'] ?? ($created['id'] ?? ''));
-        if ($gid !== '' && $day !== '') {
-            garmin_api('POST', '/training-api/schedule/', ['workoutId' => (int)$gid, 'date' => $day]);
+        if ($prevGid !== '') {
+            /* Déjà envoyée → MISE À JOUR (PUT, doc §3.5) au lieu d'un doublon. */
+            $uid = (int)cfg('garmin_user_id', 0);
+            $payload['workoutId'] = (int)$prevGid;
+            if ($uid > 0) $payload['ownerId'] = $uid;
+            try {
+                garmin_api('PUT', '/training-api/workout/v2/' . rawurlencode($prevGid), $payload);
+                $gid = $prevGid;
+            } catch (Throwable $ue) {
+                /* 404 : supprimée côté Garmin → recréation simple. */
+                if (stripos($ue->getMessage(), '404') === false && stripos($ue->getMessage(), 'Not Found') === false) throw $ue;
+                $prevGid = '';
+            }
         }
-        $pushed = json_decode((string)cfg('garmin_pushed', '{}'), true) ?: [];
-        $pushed[$planId] = ['gid' => $gid, 'date' => $day, 'name' => (string)$plan['title'], 'ts' => time()];
+        if ($prevGid === '') {
+            $created = garmin_api('POST', '/workoutportal/workout/v2', $payload);
+            $gid = (string)($created['workoutId'] ?? ($created['id'] ?? ''));
+            $oldSid = '';   /* nouvelle séance → nouvelle planification */
+        }
+        if ($gid !== '' && $day !== '') {
+            if ($oldSid !== '' && $gid === $prevGid) {
+                /* Re-planification au jour courant (doc §4.5) */
+                try {
+                    garmin_api('PUT', '/training-api/schedule/' . rawurlencode($oldSid), ['scheduleId' => (int)$oldSid, 'workoutId' => (int)$gid, 'date' => $day]);
+                    $sid = $oldSid;
+                } catch (Throwable $se) {
+                    $sch = garmin_api('POST', '/training-api/schedule/', ['workoutId' => (int)$gid, 'date' => $day]);
+                    $sid = (string)($sch['scheduleId'] ?? '');
+                }
+            } else {
+                $sch = garmin_api('POST', '/training-api/schedule/', ['workoutId' => (int)$gid, 'date' => $day]);
+                $sid = (string)($sch['scheduleId'] ?? '');
+            }
+        }
+        $pushed[$planId] = array_filter(['gid' => $gid, 'sid' => $sid, 'date' => $day, 'name' => (string)$plan['title'], 'ts' => time()], fn ($v) => $v !== '' && $v !== null);
         cfg_set('garmin_pushed', json_encode($pushed, JSON_UNESCAPED_UNICODE));
     } catch (Throwable $e) {
         cfg_set('garmin_last_push', json_encode(['when' => date('c'), 'ok' => false, 'error' => $e->getMessage(), 'plan' => $planId], JSON_UNESCAPED_UNICODE));
         throw $e;
     }
     return ['gid' => $gid, 'date' => $day, 'name' => (string)$plan['title']];
+}
+
+/** Re-planifie une séance DÉJÀ envoyée vers une autre date (PUT schedule si sid connu, sinon création — doc §4.3/4.5). No-op si jamais envoyée. */
+function garmin_reschedule_workout(int $planId, string $newDate): void {
+    $pushed = json_decode((string)cfg('garmin_pushed', '{}'), true) ?: [];
+    $info = $pushed[$planId] ?? [];
+    $gid = (string)($info['gid'] ?? '');
+    if ($gid === '') return;
+    $sid = (string)($info['sid'] ?? '');
+    if ($sid !== '') {
+        try {
+            garmin_api('PUT', '/training-api/schedule/' . rawurlencode($sid), ['scheduleId' => (int)$sid, 'workoutId' => (int)$gid, 'date' => $newDate]);
+        } catch (Throwable $e) { $sid = ''; }
+    }
+    if ($sid === '') {
+        $sch = garmin_api('POST', '/training-api/schedule/', ['workoutId' => (int)$gid, 'date' => $newDate]);
+        $sid = (string)($sch['scheduleId'] ?? '');
+    }
+    $pushed[$planId] = array_filter(['gid' => $gid, 'sid' => $sid, 'date' => $newDate, 'name' => (string)($info['name'] ?? ''), 'ts' => time()], fn ($v) => $v !== '' && $v !== null);
+    cfg_set('garmin_pushed', json_encode($pushed, JSON_UNESCAPED_UNICODE));
+}
+
+/** Retire la séance du calendrier + bibliothèque Garmin (supprimée côté TRQ) — erreurs ignorées (best effort). */
+function garmin_delete_workout(int $planId): void {
+    $pushed = json_decode((string)cfg('garmin_pushed', '{}'), true) ?: [];
+    $info = $pushed[$planId] ?? [];
+    $sid = (string)($info['sid'] ?? '');
+    $gid = (string)($info['gid'] ?? '');
+    try { if ($sid !== '') garmin_api('DELETE', '/training-api/schedule/' . rawurlencode($sid)); } catch (Throwable $e) { /* déjà absente */ }
+    try { if ($gid !== '') garmin_api('DELETE', '/training-api/workout/v2/' . rawurlencode($gid)); } catch (Throwable $e) { /* déjà absente */ }
+    unset($pushed[$planId]);
+    cfg_set('garmin_pushed', json_encode($pushed, JSON_UNESCAPED_UNICODE));
 }
 
 /* ================================================================================

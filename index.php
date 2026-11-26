@@ -4927,7 +4927,10 @@ if ($p === 'calendar') {
         return $out . '</a>';
     };
 
-    $renderPlan = function (array $pl, bool $big) use ($cmpByPlan, $lvlChip): string {
+    /* Séances déjà envoyées vers Garmin Connect (badge ◉ bleu) */
+    $gmPushed = [];
+    try { $gmPushed = json_decode((string)cfg('garmin_pushed', '{}'), true) ?: []; } catch (Throwable $e) {}
+    $renderPlan = function (array $pl, bool $big) use ($cmpByPlan, $lvlChip, $gmPushed): string {
         $hasStruct = !empty($pl['profile']);
         $canDrag = empty($pl['activity_id'] ?? null) && !isset($cmpByPlan[$pl['id']]);   // déjà réalisée = non déplaçable
         $out = '<div class="group/pl relative p-2 rounded-lg border border-dashed border-muted-foreground/40 bg-muted/20 ' . ($big ? 'text-sm' : 'text-xs') . ' leading-tight' . ($canDrag ? ' draggable-plan cursor-grab active:cursor-grabbing' : '') . '"'
@@ -4940,6 +4943,9 @@ if ($p === 'calendar') {
         if ($canDrag) {
             $mtTitle = h(json_encode((string)$pl['title'], JSON_UNESCAPED_UNICODE));
             $out .= '<button type="button" class="absolute bottom-1 right-1 flex size-6 items-center justify-center rounded text-xs text-muted-foreground transition hover:bg-muted" onclick="calStartMove(\'plan\', ' . (int)$pl['id'] . ', ' . $mtTitle . ')" title="Déplacer vers un autre jour (touche le jour de destination ensuite)" aria-label="Déplacer">✥</button>';
+        }
+        if (isset($gmPushed[(int)$pl['id']])) {
+            $out .= '<span class="absolute left-1 top-1 flex size-5 items-center justify-center rounded font-bold text-[11px] group-hover/pl:hidden" style="color:#007cc3" title="Planifiée sur Garmin Connect (calendrier → montre à la synchro)">◉</span>';
         }
         if ($hasStruct) {
             $out .= '<a href="?p=workouts&plan=' . (int)$pl['id'] . '" class="block truncate pr-8 font-semibold hover:underline" title="Ouvrir dans le builder">🧩 ' . h($pl['title']) . '</a>'

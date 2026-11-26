@@ -246,6 +246,8 @@ try {
         echo json_encode(['ok' => true, 'id' => push_planned_to_icu((int)$_POST['id'])]);
 
     } elseif ($action === 'plan_delete') {
+        /* Retire d'abord du calendrier/bibliothèque Garmin si déjà envoyée (best effort) */
+        try { garmin_delete_workout((int)$_POST['id']); } catch (Throwable $ge) { }
         db()->prepare('DELETE FROM planned_workouts WHERE id=?')->execute([(int)$_POST['id']]);
         echo json_encode(['ok' => true]);
 
@@ -261,6 +263,10 @@ try {
         /* Séance déjà poussée vers intervals.icu : met l'événement à jour (upsert par uid, pas de doublon). Garmin : pas de re-push (leur API ne met pas à jour — évite les doublons dans le calendrier Garmin). */
         if ((string)($mv['icu_event_id'] ?? '') !== '' && trim((string)$mv['structure']) !== '') {
             try { push_planned_to_icu($id); } catch (Throwable $me) { }
+        }
+        /* Garmin : re-planifie au nouveau jour si déjà envoyée (PUT schedule existant, pas de doublon) */
+        if (trim((string)$mv['structure']) !== '') {
+            try { garmin_reschedule_workout($id, $d); } catch (Throwable $ge) { }
         }
         echo json_encode(['ok' => true]);
 
