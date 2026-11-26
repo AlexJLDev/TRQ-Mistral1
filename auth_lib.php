@@ -282,6 +282,19 @@ function auth_reset_password(string $token, string $pw, string $pw2): ?string {
     return null;
 }
 
+/** Lien de réinitialisation généré par un administrateur (valable 24 h) : un seul lien actif par compte, le lien est aussi envoyé par e-mail en best effort. */
+function auth_admin_reset_link(int $uid): array {
+    $st = auth_db()->prepare('SELECT * FROM users WHERE id=? AND active=1'); $st->execute([$uid]); $u = $st->fetch();
+    if (!$u) return ['ok' => false, 'error' => 'Compte introuvable ou désactivé.'];
+    auth_db()->prepare('UPDATE password_resets SET used=1 WHERE user_id=?')->execute([$uid]);
+    $token = bin2hex(random_bytes(32));
+    auth_db()->prepare('INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (?,?,?)')->execute([$uid, hash('sha256', $token), time() + 86400]);
+    $link = base_url() . '/login.php?a=reset&token=' . $token;
+    $mail = send_mail((string)$u['email'], 'TRQ – Réinitialisation de votre mot de passe',
+        "Bonjour " . $u['name'] . ",\n\nUn administrateur a demandé la réinitialisation de votre mot de passe.\nPour en choisir un nouveau, ouvrez ce lien (valable 24 heures) :\n" . $link . "\n\nSi vous n'êtes pas à l'origine de cette demande, contactez l'administrateur.\n\n— TRQ\n");
+    return ['ok' => true, 'link' => $link, 'mail' => $mail];
+}
+
 /* ---------- compte ---------- */
 function auth_change_password(int $uid, string $current, string $new): ?string {
     $u = auth_db()->query('SELECT * FROM users WHERE id=' . $uid)->fetch();

@@ -5519,6 +5519,7 @@ if ($p === 'admin') {
           <td class="whitespace-nowrap text-right">
             <?php if (!$self): ?>
               <button type="button" class="btn" data-size="sm" data-variant="outline" onclick="adminAct('admin_toggle', <?= (int)$u['id'] ?>)"><?= $u['active'] ? 'Désactiver' : 'Réactiver' ?></button>
+              <button type="button" class="btn" data-size="sm" data-variant="outline" title="Générer un lien de réinitialisation de mot de passe (valable 24 h)" onclick="adminResetPw(<?= (int)$u['id'] ?>)">🔑 Mot de passe</button>
               <button type="button" class="btn" data-size="icon-sm" data-variant="ghost" title="Supprimer le compte et ses données" aria-label="Supprimer" onclick="if (confirm('Supprimer ce compte et TOUTES ses données ?')) adminAct('admin_delete', <?= (int)$u['id'] ?>)">🗑</button>
             <?php endif; ?>
           </td>
@@ -5527,6 +5528,15 @@ if ($p === 'admin') {
     </section></div>
     <script>
     async function adminAct(action, id) { try { await call(action, {id}); location.reload(); } catch (e) { alert(e.message); } }
+    async function adminResetPw(id) {
+      try {
+        const r = await call('admin_resetpw', {id});
+        const msg = r.mail
+          ? 'Lien envoyé par e-mail. Copie de secours (valable 24 h) — Ctrl+C pour copier :'
+          : 'Lien de réinitialisation (valable 24 h) — transmets-le à l\'utilisateur, Ctrl+C pour copier :';
+        prompt(msg, r.link);
+      } catch (e) { alert(e.message); }
+    }
     </script>
     <?php foot(); exit;
 }

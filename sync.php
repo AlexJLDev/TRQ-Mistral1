@@ -313,6 +313,14 @@ try {
         else auth_delete_user($id);
         echo json_encode(['ok' => true]);
 
+    } elseif ($action === 'admin_resetpw') {
+        if (!auth_enabled() || !is_admin()) throw new RuntimeException(t('Accès réservé aux administrateurs.'));
+        $id = (int)($_POST['id'] ?? 0);
+        if ($id === current_uid()) throw new RuntimeException('Pour votre propre compte, utilisez le changement de mot de passe des Paramètres.');
+        $r = auth_admin_reset_link($id);
+        if (!$r['ok']) throw new RuntimeException($r['error']);
+        echo json_encode(['ok' => true, 'link' => $r['link'], 'mail' => $r['mail']]);
+
     } elseif ($action === 'notif_list') {
         echo json_encode(['ok' => true, 'items' => notif_latest(40), 'unread' => notif_unread()]);
 
