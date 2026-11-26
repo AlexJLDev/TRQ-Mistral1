@@ -41,9 +41,17 @@ const GARMIN_SSO_TOKEN     = 'https://connectapi.garmin.com/di-oauth2-service/oa
 const GARMIN_API_BASE      = 'https://apis.garmin.com';
 const GARMIN_WEBHOOK_ACK   = '{"response": "ACKNOWLEDGED"}';
 
-/** Générateur PKCE : crée le code_verifier, le met en session et rend la paire. */
+/**
+ * Générateur PKCE : crée le code_verifier et rend la paire.
+ * Copies : ① session PHP ② copie durable en base (garmin_pkce, 15 min) —
+ * nécessaire car require_login() ferme la session et que le cookie de session
+ * peut être perdu/régénéré pendant le passage chez Garmin (le callback arrive
+ * alors avec une session neuve et un code_verifier vide → erreur Garmin
+ * « code_verifier must be provided »).
+ */
 function garmin_pkce_pair(): array {
     $verifier = rtrim(strtr(base64_encode(random_bytes(64)), '+/', '-_'), '=');
+    try { cfg_set('garmin_pkce', json_encode(['v' => $verifier, 't' => time()], JSON_UNESCAPED_UNICODE)); } catch (Throwable $e) {}
     if (session_status() !== PHP_SESSION_ACTIVE) session_start();
     $_SESSION['garmin_pkce_verifier'] = $verifier;
     $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
@@ -51,7 +59,14 @@ function garmin_pkce_pair(): array {
 }
 function garmin_pkce_verifier(): string {
     if (session_status() !== PHP_SESSION_ACTIVE) session_start();
-    return (string)($_SESSION['garmin_pkce_verifier'] ?? '');
+    $v = (string)($_SESSION['garmin_pkce_verifier'] ?? '');
+    if ($v !== '') return $v;
+    /* Repli : la copie posée en base au start (valable 15 min). */
+    try {
+        $rec = json_decode((string)cfg('garmin_pkce', ''), true);
+        if (is_array($rec) && !empty($rec['v']) && (time() - (int)($rec['t'] ?? 0)) < 900) return (string)$rec['v'];
+    } catch (Throwable $e) {}
+    return '';
 }
 
 /** URL de rappel OAuth à enregistrer chez Garmin : <origine de l'app>/oauth_garmin.php */
@@ -125,6 +140,7 @@ function garmin_exchange_code(string $code): array {
     ]);
     if (empty($resp['access_token'])) throw new RuntimeException('Garmin : réponse OAuth inattendue (' . garmin_http_excerpt($resp) . ').');
     garmin_store_tokens($resp);
+    try { cfg_set('garmin_pkce', ''); } catch (Throwable $e) {}   // le code est à usage unique : purge le verifier
     return $resp;
 }
 

@@ -102,15 +102,15 @@ if (isset($_GET['error'])) {
     exit;
 }
 
-/* Start : pop-up demandée → mémorise le mode (le state OAuth le re-transporte aussi jusqu'au callback) */
+/* Start : pop-up demandée → mémorise le mode (le state OAuth le re-transporte aussi jusqu'au callback).
+   NB : le flag est posé APRÈS garmin_authorize_url() car celle-ci rouvre la session via garmin_pkce_pair()
+   (require_login() la ferme — toute écriture avant serait écrasée par la relecture). */
 $isPopup = isset($_GET['popup']);
-if ($isPopup) {
-    $_SESSION['garmin_oauth_popup'] = 1;
-}
 
 /* Start : pas encore configuré → page d'information (aucun appel réseau) */
 header('Content-Type: text/html; charset=utf-8');
 $authUrl = $gs['configured'] ? garmin_authorize_url($isPopup) : '';
+if ($isPopup && $authUrl !== '') { $_SESSION['garmin_oauth_popup'] = 1; }
 ?>
 <!doctype html>
 <html lang="fr">
