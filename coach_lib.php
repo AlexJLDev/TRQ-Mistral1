@@ -436,6 +436,37 @@ function coach_plan_text(string $structureJson, string $mode): string {
     return implode("\n", $out);
 }
 
+/**
+ * Transformer la structure TRQ en TEXTE NATIF intervals.icu (le format "workout text"
+ * reconnu par leur API pour créer une séance planifiée structurée affichée avec le graphe) :
+ * ligne "- 15m 55% Warmup", répétition "- 3x" suivie des lignes d'étapes, etc.
+ * (documenté sur forum.intervals.icu t/63624 : la description doit suivre ce format). */
+function coach_icu_native_text(string $structureJson, string $mode): string {
+    $st = json_decode($structureJson, true);
+    if (!is_array($st) || !$st) return '';
+    $dur = function (int $s): string {
+        if ($s < 60) return $s . 's';
+        return $s % 60 === 0 ? intdiv($s, 60) . 'm' : rtrim(rtrim(number_format($s / 60, 1, '.', ' '), '0'), '.') . 'm';
+    };
+    $rng = function (array $s): string {
+        $lo = (float)($s['lo'] ?? 100); $hi = (float)($s['hi'] ?? $lo);
+        return ($hi - $lo < 0.5 ? round($lo) : round($lo) . '-' . round($hi)) . '%';
+    };
+    $one = function (array $s) use ($dur, $rng): string {
+        $k = (string)($s['kind'] ?? 'work');
+        $suffix = $k === 'warmup' ? ' Warmup' : ($k === 'cooldown' ? ' Cooldown' : '');
+        return '- ' . $dur((int)($s['dur'] ?? 60)) . ' ' . $rng($s) . $suffix . (!empty($s['ramp']) ? ' ramp' : '');
+    };
+    $out = [];
+    foreach ($st as $b) {
+        if (isset($b['steps']) && is_array($b['steps'])) {
+            $out[] = '- ' . max(1, (int)($b['reps'] ?? 1)) . 'x';
+            foreach ($b['steps'] as $c) $out[] = $one((array)$c);
+        } else $out[] = $one((array)$b);
+    }
+    return implode("\n", $out);
+}
+
 /* ---------- commentaires du coach sous les séances de l'athlète ---------- */
 
 function coach_comments_schema(PDO $p): void {

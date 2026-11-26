@@ -1270,12 +1270,18 @@ function workout_save(array $d): int {
 function push_planned_to_icu(int $planId): string {
     $st = db()->prepare('SELECT * FROM planned_workouts WHERE id=?'); $st->execute([$planId]); $p = $st->fetch();
     if (!$p) throw new RuntimeException('Séance planifiée introuvable.');
-    if (trim((string)($p['icu_text'] ?? '')) === '') throw new RuntimeException("Cette séance n'a pas de description structurée à envoyer (créée hors du builder).");
-    $ev = icu_send('POST', '/athlete/' . athlete_id() . '/events', [
+    if (trim((string)($p['icu_text'] ?? '')) === '' && trim((string)($p['structure'] ?? '')) === '') throw new RuntimeException("Cette séance n'a pas de description structurée à envoyer (créée hors du builder).");
+    /* Format natif intervals.icu (affichage structuré avec graphe) généré depuis la structure TRQ ; repli : le texte existant. */
+    $native = coach_icu_native_text((string)($p['structure'] ?? ''), ($p['tss_type'] ?? '') === 'hrtss' ? 'hr' : 'power');
+    $desc = trim($native) !== '' ? $native : (string)$p['icu_text'];
+    $body = [
         'category' => 'WORKOUT', 'start_date_local' => $p['date'] . 'T00:00:00',
         'type' => $p['sport'] === 'run' ? 'Run' : (($p['sport'] ?? '') === 'swim' ? 'Swim' : 'Ride'),
-        'name' => $p['title'], 'description' => (string)$p['icu_text'], 'moving_time' => (int)$p['duration'], 'uid' => 'cyclolab-plan-' . $planId,
-    ], ['upsertOnUid' => 'true']);
+        'name' => $p['title'], 'description' => $desc, 'moving_time' => (int)$p['duration'], 'uid' => 'cyclolab-plan-' . $planId,
+    ];
+    if (($p['tss_type'] ?? '') === 'power') $body['target'] = 'POWER';
+    if ((int)$p['tss'] > 0) $body['icu_training_load'] = (int)$p['tss'];
+    $ev = icu_send('POST', '/athlete/' . athlete_id() . '/events', $body, ['upsertOnUid' => 'true']);
     $eid = (string)($ev['id'] ?? '');
     db()->prepare('UPDATE planned_workouts SET icu_event_id=? WHERE id=?')->execute([$eid !== '' ? $eid : 'ok', $planId]);
     return $eid;
