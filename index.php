@@ -6592,12 +6592,10 @@ if ($p === 'settings') {
         <p class="text-sm text-muted-foreground">Compte, connexions, seuils d'entraînement et module coach — tout se règle ici</p>
       </div>
 
-      <nav class="flex flex-wrap gap-2 text-xs">
-        <a href="#compte" class="rounded-full border px-3 py-1 hover:bg-muted">👤 Mon compte</a>
-        <a href="#connexions" class="rounded-full border px-3 py-1 hover:bg-muted">🔗 Connexions</a>
-        <a href="#entrainement" class="rounded-full border px-3 py-1 hover:bg-muted">🏋️ Entraînement</a>
-        <?php if (auth_enabled()): ?><a href="#coach" class="rounded-full border px-3 py-1 hover:bg-muted">🎓 Module coach</a><?php endif; ?>
-      </nav>
+      <div id="settingsTabs" class="flex w-fit gap-1 rounded-lg border p-1">
+        <button type="button" data-stab="params" class="rounded-md px-3 py-1.5 text-sm">⚙️ Paramètres</button>
+        <button type="button" data-stab="connexions" class="rounded-md px-3 py-1.5 text-sm">🔌 Connexions</button>
+      </div>
 
       <?php if (isset($_GET['purged'])): ?><div class="alert" data-variant="destructive"><h2>Base réinitialisée : toutes les données locales ont été supprimées.</h2></div><?php endif; ?>
 
@@ -6618,14 +6616,15 @@ if ($p === 'settings') {
 
       <?php if (isset($_GET['garmin'])): ?>
         <?php if ((int)$_GET['garmin'] === 1): ?>
-        <div class="alert"><h3>Compte Garmin Connect lié ✅</h3><p class="text-xs text-muted-foreground">Reste 2 étapes : ① enregistrer l'URL du webhook (affichée dans la carte Garmin) sur les endpoints push du portail Garmin — c'est elle qui fera arriver séances, sommeil, FC repos et HRV ; ② « Envoyer (7 j) » pour pousser tes séances structurées vers la montre.</p></div>
+        <?php $gmAdmin = !auth_enabled() || ((current_user()['role'] ?? '') === 'admin'); ?>
+        <div class="alert"><h3>Compte Garmin Connect lié ✅</h3><p class="text-xs text-muted-foreground"><?= $gmAdmin ? "Reste 2 étapes : ① enregistrer l'URL du webhook (affichée dans la carte Garmin) sur les endpoints push du portail Garmin — c'est elle qui fera arriver séances, sommeil, FC repos et HRV ; ② « Envoyer (7 j) » pour pousser tes séances structurées vers la montre." : 'C\'est tout : Garmin enverra automatiquement tes séances et tes données de santé dès que ta montre se synchronise.' ?></p></div>
         <?php else: ?>
         <div class="alert"><h3>Garmin déconnecté</h3><p class="text-xs text-muted-foreground">Aucune donnée Garmin n'est conservée : les clés d'accès ont été supprimées de ta base.</p></div>
         <?php endif; ?>
       <?php endif; ?>
 
       <?php if (auth_enabled()): $cu = current_user(); ?>
-      <div id="compte" class="card p-6 space-y-4 scroll-mt-20">
+      <div id="compte" class="card p-6 space-y-4 scroll-mt-20 sgroup-params">
         <header class="flex items-start justify-between gap-3">
           <div><h3 class="text-base font-semibold">Mon compte</h3>
             <p class="text-xs text-muted-foreground"><?= h($cu['name']) ?> · <?= h($cu['email']) ?> · <?= $cu['role'] === 'admin' ? 'administrateur' : ($cu['role'] === 'coach' ? 'coach' : 'utilisateur') ?></p></div>
@@ -6701,15 +6700,21 @@ if ($p === 'settings') {
       <?php endif; ?>
 
       <form method="post" class="space-y-6">
-        <div id="connexions" class="scroll-mt-20 space-y-3">
+        <div id="connexions" class="scroll-mt-20 space-y-3 sgroup-connex">
           <div>
             <h2 class="text-lg font-semibold tracking-tight">Connexions</h2>
             <p class="text-xs text-muted-foreground">Un service par carte : séances, données de santé, envoi des entraînements structurés</p>
           </div>
         <div id="connexion-icu" class="card p-6 space-y-4 scroll-mt-20">
-          <header>
-            <h3 class="text-base font-semibold">Connexion intervals.icu</h3>
-            <p class="text-xs text-muted-foreground">Générez une clé API sur intervals.icu → Settings → Developer Settings</p>
+          <header class="flex items-start justify-between gap-3">
+            <div class="flex items-center gap-3">
+              <span class="flex size-9 items-center justify-center rounded-lg bg-orange-500/15 font-bold text-orange-500"><svg viewBox="0 0 24 24" class="size-6" fill="currentColor"><circle cx="12" cy="5" r="2.2"/><rect x="10.2" y="9.5" width="3.6" height="11" rx="1.8"/></svg></span>
+              <div>
+                <h3 class="text-base font-semibold">intervals.icu</h3>
+                <p class="text-xs text-muted-foreground">Séances, TSS, calendrier — la source principale de tes données d'entraînement</p>
+              </div>
+            </div>
+            <span class="badge" data-variant="<?= trim((string)cfg('api_key', '')) !== '' ? 'default' : 'outline' ?>"><?= trim((string)cfg('api_key', '')) !== '' ? '✔ Connecté' : 'Clé à renseigner' ?></span>
           </header>
           <div class="grid gap-4">
             <div class="field">
@@ -6753,7 +6758,7 @@ if ($p === 'settings') {
         <div id="connexion-garmin" class="card p-6 space-y-4 scroll-mt-20">
           <header class="flex items-start justify-between gap-3">
             <div class="flex items-center gap-3">
-              <span class="flex size-9 items-center justify-center rounded-lg bg-sky-500/15 text-lg">⌚</span>
+              <span class="flex size-9 items-center justify-center rounded-lg bg-[#007cc3]/15 text-[#007cc3] dark:text-[#4db2ff]"><svg viewBox="0 0 24 24" class="size-6" fill="currentColor"><path d="M12 3.2 21.8 20.8H2.2Z"/></svg></span>
               <div>
                 <h3 class="text-base font-semibold">Garmin Connect</h3>
                 <p class="text-xs text-muted-foreground">Accès Starter activé — santé &amp; activités en push, envoi des séances structurées vers la montre</p>
@@ -6796,7 +6801,11 @@ if ($p === 'settings') {
             <div class="p-3">
               <p class="text-sm font-medium">📥 Recevoir les données de santé &amp; activités</p>
               <p class="text-xs text-muted-foreground">Push Garmin → TRQ (séances, sommeil, FC repos, HRV, poids). Dernière réception : <?= !empty($gs['webhook_last']['when']) ? date('d/m H:i', (int)$gs['webhook_last']['when']) : '— en attente du premier push' ?><?php if (!empty($gs['webhook_last']['res']['activities']) || !empty($gs['webhook_last']['res']['wellness'])): ?> · <?= (int)$gs['webhook_last']['res']['activities'] ?> séance(s), <?= (int)$gs['webhook_last']['res']['wellness'] ?> résumé(s) santé<?php endif ?></p>
+              <?php if (!auth_enabled() || (($cu['role'] ?? '') === 'admin')): ?>
               <p class="mt-1 text-[11px] text-muted-foreground break-all">URL à enregistrer dans le portail Garmin sur <b>tous</b> les endpoints push : <code class="rounded bg-muted px-1" id="garminWebhookUri"><?= h(garmin_webhook_uri()) ?></code></p>
+              <?php else: ?>
+              <p class="mt-1 text-[11px] text-muted-foreground">Important : aucun réglage de ton côté. Garde simplement ta montre synchronisée avec Garmin Connect — TRQ est notifié automatiquement.</p>
+              <?php endif; ?>
             </div>
             <div class="p-3 flex items-center justify-between gap-3 flex-wrap">
               <div class="min-w-0">
@@ -6818,6 +6827,7 @@ if ($p === 'settings') {
             </div>
           </div>
 
+          <?php if (!auth_enabled() || (($cu['role'] ?? '') === 'admin')): ?>
           <details class="rounded-lg border p-3">
             <summary class="cursor-pointer text-sm font-medium">Statut technique</summary>
             <ul class="mt-2 space-y-1 text-xs text-muted-foreground">
@@ -6828,6 +6838,7 @@ if ($p === 'settings') {
               <li>Envoi des séances : Training API v2 (<code>apis.garmin.com/training-api</code>) — en cas d'erreur, le détail est affiché dans la ligne « Envoyer » ci-dessus.</li>
             </ul>
           </details>
+          <?php endif; ?>
 
           <div class="flex items-center gap-3 flex-wrap">
             <?php if ($gs['configured']): ?>
@@ -6879,6 +6890,7 @@ if ($p === 'settings') {
         </script>
         </div><!-- /#connexions -->
 
+        <div class="sgroup-params space-y-6">
         <div id="entrainement" class="card p-6 space-y-4 scroll-mt-20">
           <header>
             <h3 class="text-base font-semibold">Profil athlète</h3>
@@ -6959,8 +6971,10 @@ if ($p === 'settings') {
             </button>
           </div>
         </div>
+        </div><!-- /.sgroup-params (entraînement + seuils) -->
       </form>
 
+        <div class="sgroup-params space-y-6">
         <?php if (auth_enabled()): ?>
         <?php $cuC = current_user(); $isCoach = coach_is_coach();
               $myCoaches = coach_coached_by((int)$me['id']);
@@ -7054,6 +7068,7 @@ if ($p === 'settings') {
           <?php endif; ?>
         </div>
         <?php endif; ?>
+        </div><!-- /.sgroup-params (coach) -->
 
     </div>
     <?php ?>
@@ -7068,6 +7083,29 @@ if ($p === 'settings') {
       } catch (e) { msg.className = 'text-xs text-destructive'; msg.textContent = '✗ ' + e.message; }
       btn.disabled = false;
     });
+    // Onglets Paramètres / Connexions
+    (function () {
+      const tabs = document.querySelectorAll('#settingsTabs [data-stab]');
+      function stTab(name) {
+        const cx = name === 'connexions';
+        document.querySelectorAll('.sgroup-connex').forEach(el => el.classList.toggle('hidden', !cx));
+        document.querySelectorAll('.sgroup-params').forEach(el => el.classList.toggle('hidden', cx));
+        tabs.forEach(b => {
+          const act = b.dataset.stab === name;
+          b.classList.toggle('bg-primary', act);
+          b.classList.toggle('text-primary-foreground', act);
+        });
+      }
+      tabs.forEach(b => b.addEventListener('click', () => stTab(b.dataset.stab)));
+      const h = location.hash;
+      if (h.indexOf('#connexion') === 0 || new URLSearchParams(location.search).has('garmin')) {
+        stTab('connexions');
+        const tgt = document.querySelector(h) || document.getElementById('connexions');
+        setTimeout(() => { try { tgt.scrollIntoView({behavior: 'smooth'}); } catch (e) {} }, 60);
+      } else {
+        stTab('params');
+      }
+    })();
     </script>
     <?php foot(); exit;
 }
