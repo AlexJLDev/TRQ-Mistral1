@@ -254,9 +254,14 @@ try {
         $id = (int)($_POST['id'] ?? 0);
         $d = trim((string)($_POST['date'] ?? ''));
         if ($id <= 0 || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) throw new RuntimeException('Coordonnées de déplacement invalides.');
-        $has = db()->prepare('SELECT COUNT(*) FROM planned_workouts WHERE id=?'); $has->execute([$id]);
-        if (!(int)$has->fetchColumn()) throw new RuntimeException('Séance planifiée introuvable.');
+        $has = db()->prepare('SELECT id, icu_event_id, structure FROM planned_workouts WHERE id=?'); $has->execute([$id]);
+        $mv = $has->fetch();
+        if (!$mv) throw new RuntimeException('Séance planifiée introuvable.');
         db()->prepare('UPDATE planned_workouts SET date=? WHERE id=?')->execute([$d, $id]);
+        /* Séance déjà poussée vers intervals.icu : met l'événement à jour (upsert par uid, pas de doublon). Garmin : pas de re-push (leur API ne met pas à jour — évite les doublons dans le calendrier Garmin). */
+        if ((string)($mv['icu_event_id'] ?? '') !== '' && trim((string)$mv['structure']) !== '') {
+            try { push_planned_to_icu($id); } catch (Throwable $me) { }
+        }
         echo json_encode(['ok' => true]);
 
     } elseif ($action === 'plan_from_workout') {
@@ -272,7 +277,10 @@ try {
         $icuText = $structure !== '' ? coach_plan_text($structure, $mode) : '';
         db()->prepare('INSERT INTO planned_workouts (date, sport, title, duration, distance, tss, tss_type, notes, structure, profile, workout_id, icu_text) VALUES (?,?,?,?,0,?,?,?,?,?,?,?)')
             ->execute([$d, $w['sport'], $w['name'], $w['duration'], $w['tss'], $mode === 'hr' ? 'hrtss' : 'power', $w['notes'], $structure, $w['profile'], $wid, mb_substr($icuText, 0, 20000)]);
-        echo json_encode(['ok' => true]);
+        $pid = (int)db()->lastInsertId();
+        /* Envoi direct vers intervals.icu + Garmin Connect dès la planification (silencieux si non reliés) */
+        $push = $structure !== '' ? auto_push_planned($pid) : [];
+        echo json_encode(['ok' => true, 'push' => $push]);
 
     } elseif ($action === 'account_password') {
         if (!auth_enabled()) throw new RuntimeException(t('Authentification désactivée.'));

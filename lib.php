@@ -1272,12 +1272,35 @@ function push_planned_to_icu(int $planId): string {
     if (!$p) throw new RuntimeException('Séance planifiée introuvable.');
     if (trim((string)($p['icu_text'] ?? '')) === '') throw new RuntimeException("Cette séance n'a pas de description structurée à envoyer (créée hors du builder).");
     $ev = icu_send('POST', '/athlete/' . athlete_id() . '/events', [
-        'category' => 'WORKOUT', 'start_date_local' => $p['date'] . 'T00:00:00', 'type' => $p['sport'] === 'run' ? 'Run' : 'Ride',
+        'category' => 'WORKOUT', 'start_date_local' => $p['date'] . 'T00:00:00',
+        'type' => $p['sport'] === 'run' ? 'Run' : (($p['sport'] ?? '') === 'swim' ? 'Swim' : 'Ride'),
         'name' => $p['title'], 'description' => (string)$p['icu_text'], 'moving_time' => (int)$p['duration'], 'uid' => 'cyclolab-plan-' . $planId,
     ], ['upsertOnUid' => 'true']);
     $eid = (string)($ev['id'] ?? '');
     db()->prepare('UPDATE planned_workouts SET icu_event_id=? WHERE id=?')->execute([$eid !== '' ? $eid : 'ok', $planId]);
     return $eid;
+}
+
+/**
+ * Envoi AUTOMATIQUE d'une séance planifiée structurée vers intervals.icu + Garmin Connect.
+ * Non bloquant (chaque cible attrape ses erreurs) et silencieux si la cible n'est pas connectée.
+ * intervals.icu : upsert par uid → aucun doublon même en renvoyant.
+ * Garmin : première séance du même jour déjà poussée → ignorée (garde garmin_pushed).
+ * Renvoie une liste [{ok, target, error?}].
+ */
+function auto_push_planned(int $planId): array {
+    $out = [];
+    /* intervals.icu — seulement si la clé API est en place */
+    if (trim((string)cfg('api_key', '')) !== '') {
+        try { push_planned_to_icu($planId); $out[] = ['ok' => true, 'target' => 'intervals.icu']; }
+        catch (Throwable $e) { $out[] = ['ok' => false, 'target' => 'intervals.icu', 'error' => $e->getMessage()]; }
+    }
+    /* Garmin Connect — seulement si le compte est relié */
+    if (function_exists('garmin_status') && garmin_status()['connected']) {
+        try { garmin_push_workout($planId); $out[] = ['ok' => true, 'target' => 'Garmin']; }
+        catch (Throwable $e) { $out[] = ['ok' => false, 'target' => 'Garmin', 'error' => $e->getMessage()]; }
+    }
+    return $out;
 }
 
 /** Planifie au calendrier ; envoie aussi à intervals.icu si demandé (l'échec de l'envoi n'annule pas la planification). */
@@ -1287,12 +1310,8 @@ function workout_plan(array $d): array {
     db()->prepare('INSERT INTO planned_workouts (date, sport, title, duration, distance, tss, tss_type, notes, structure, profile, workout_id, icu_text) VALUES (?,?,?,?,0,?,?,?,?,?,?,?)')
         ->execute([$date, $w['sport'], $w['name'], $w['duration'], $w['tss'], $w['mode'] === 'hr' ? 'hrtss' : 'power', $w['notes'], $w['structure'], $w['profile'], (int)($d['workout_id'] ?? 0) ?: null, mb_substr((string)($d['text'] ?? ''), 0, 20000)]);
     $planId = (int)db()->lastInsertId();
-    $res = ['planned_id' => $planId, 'icu' => null];
-    if (!empty($d['push'])) {
-        try { $res['icu'] = ['ok' => true, 'id' => push_planned_to_icu($planId)]; }
-        catch (Throwable $e) { $res['icu'] = ['ok' => false, 'error' => $e->getMessage()]; }
-    }
-    return $res;
+    /* Envoi automatique vers intervals.icu + Garmin (auparavant : case à cocher, ICU seulement) */
+    return ['planned_id' => $planId, 'icu' => null, 'push' => auto_push_planned($planId)];
 }
 
 function process_activity(array $row): void {

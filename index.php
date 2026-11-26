@@ -5215,6 +5215,11 @@ if ($p === 'calendar') {
         const r = await fetch('sync.php', { method: 'POST', body: new URLSearchParams({ action, ...params }) });
         let j = null; try { j = await r.json(); } catch (e) {}
         if (!r.ok || !j || !j.ok) { alert('Déplacement impossible : ' + ((j && j.error) || ('HTTP ' + r.status))); return false; }
+        if (j.push && j.push.length) {                       /* envoi auto intervals.icu / Garmin */
+          const ok = j.push.filter(x => x.ok).map(x => '✓ ' + x.target);
+          const ko = j.push.filter(x => !x.ok).map(x => '✗ ' + x.target + ' : ' + (x.error || '?'));
+          try { NOTIF_NS.toast({ level: ko.length ? 'warn' : 'good', title: 'Séance planifiée', body: ok.concat(ko).join(' · ') }); } catch (e) {}
+        }
         location.reload(); return true;
       }
       function begin(x, y) {
