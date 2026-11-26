@@ -314,7 +314,7 @@ function garmin_build_workout(array $plan): array {
 }
 
 /**
- * Pousse la séance planifiée $planId vers Garmin Connect (Training API v2) et la planifie à sa date.
+ * Pousse la séance planifiée $planId vers Garmin Connect (Training API — chemin /training-api/workout confirmé par sonde) et la planifie à sa date.
  * Journalise l'erreur éventuelle dans garmin_last_push (diagnostic dans la carte Paramètres).
  */
 function garmin_push_workout(int $planId): array {
@@ -326,10 +326,10 @@ function garmin_push_workout(int $planId): array {
     $day = substr((string)$plan['date'], 0, 10);
     $gid = '';
     try {
-        $created = garmin_api('POST', '/training-api/api/v2/workout', $payload);
+        $created = garmin_api('POST', '/training-api/workout', $payload);
         $gid = (string)($created['workoutId'] ?? ($created['id'] ?? ''));
         if ($gid !== '' && $day !== '') {
-            garmin_api('POST', '/training-api/api/v2/workout/' . rawurlencode($gid) . '/schedule', ['calendarDate' => $day]);
+            garmin_api('POST', '/training-api/workout/' . rawurlencode($gid) . '/schedule', ['calendarDate' => $day]);
         }
         $pushed = json_decode((string)cfg('garmin_pushed', '{}'), true) ?: [];
         $pushed[$planId] = ['gid' => $gid, 'date' => $day, 'name' => (string)$plan['title'], 'ts' => time()];
