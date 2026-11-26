@@ -20,16 +20,18 @@
        (le token est affiché dans la carte Garmin des Paramètres et généré
        automatiquement à la première ouverture de la carte).
 
-   Clés de configuration (table settings de la base utilisateur) :
-     - garmin_client_id        (public)
-     - garmin_client_secret    (chiffré AES-256-GCM automatiquement via cfg_set)
-     - garmin_access_token     (chiffré)
+   Clés de configuration :
+     - garmin_client_id        (public — réglage GLOBAL d'application, table app_cfg d'auth.sqlite,
+                               repli sur settings utilisateur pour les installations existantes)
+     - garmin_client_secret    (idem global, chiffré AES-256-GCM automatiquement via gcfg_set)
+     - garmin_access_token     (par utilisateur, chiffré)
      - garmin_refresh_token    (chiffré)
      - garmin_token_exp        (expiration du token, timestamp unix)
      - garmin_user_id          (userId Garmin — sert à router les webhooks multi-utilisateurs)
      - garmin_user_display     (identifiant affiché après liaison)
      - garmin_permissions      (JSON : droits accordés par l'utilisateur côté Garmin)
-     - garmin_webhook_token    (secret dans l'URL du webhook)
+     - garmin_webhook_token    (secret dans l'URL du webhook — réglage GLOBAL d'application :
+                               Garmin pousse tous les utilisateurs vers la même URL)
      - garmin_webhook_last     (JSON : dernier webhook reçu — diagnostic)
      - garmin_pushed           (JSON : {id séance planifiée => {gid, date, name, ts}})
      - garmin_last_push        (JSON : dernière requête/réponse Training API — diagnostic)
@@ -40,6 +42,17 @@ const GARMIN_SSO_AUTHORIZE = 'https://connect.garmin.com/oauth2Confirm';
 const GARMIN_SSO_TOKEN     = 'https://connectapi.garmin.com/di-oauth2-service/oauth/token';
 const GARMIN_API_BASE      = 'https://apis.garmin.com';
 const GARMIN_WEBHOOK_ACK   = '{"response": "ACKNOWLEDGED"}';
+
+/** Identifiants OAuth de l'APPLICATION (délivrés une seule fois sur le portail développeur Garmin) :
+    réglage global d'abord (gcfg, partagé par tous les comptes), repli sur le réglage utilisateur
+    (installations existantes où les clés ont été saisies dans la carte Paramètres d'un compte). */
+function garmin_client_creds(): array {
+    $id = trim((string)gcfg('garmin_client_id', ''));
+    if ($id === '') $id = trim((string)cfg('garmin_client_id', ''));
+    $sec = trim((string)gcfg('garmin_client_secret', ''));
+    if ($sec === '') $sec = trim((string)cfg('garmin_client_secret', ''));
+    return [$id, $sec];
+}
 
 /**
  * Générateur PKCE : crée le code_verifier et rend la paire.
@@ -86,15 +99,15 @@ function garmin_redirect_uri_url_base(): string {
 
 /** URL du webhook push à enregistrer dans le portail Garmin (token inclus). */
 function garmin_webhook_uri(): string {
-    $tok = trim((string)cfg('garmin_webhook_token', ''));
-    if ($tok === '') { $tok = bin2hex(random_bytes(24)); cfg_set('garmin_webhook_token', $tok); }
+    $tok = trim((string)gcfg('garmin_webhook_token', ''));
+    if ($tok === '') $tok = trim((string)cfg('garmin_webhook_token', ''));
+    if ($tok === '') { $tok = bin2hex(random_bytes(24)); gcfg_set('garmin_webhook_token', $tok); }
     return garmin_redirect_uri_url_base() . '/garmin_webhook.php?token=' . $tok;
 }
 
 /** Statut de la connexion Garmin — aucun appel réseau, lecture locale des réglages. */
 function garmin_status(): array {
-    $clientId = trim((string)cfg('garmin_client_id', ''));
-    $secret   = trim((string)cfg('garmin_client_secret', ''));
+    [$clientId, $secret] = garmin_client_creds();
     $token    = trim((string)cfg('garmin_access_token', ''));
     $exp      = (int)cfg('garmin_token_exp', '0');
     return [
@@ -119,7 +132,7 @@ function garmin_authorize_url(bool $popup = false): string {
     [, $challenge] = garmin_pkce_pair();
     return GARMIN_SSO_AUTHORIZE . '?' . http_build_query([
         'response_type'         => 'code',
-        'client_id'             => (string)cfg('garmin_client_id', ''),
+        'client_id'             => garmin_client_creds()[0],
         'redirect_uri'          => garmin_redirect_uri(),
         'scope'                 => 'ACTIVITY_EXPORT HEALTH_EXPORT WORKOUT_IMPORT',
         'state'                 => ($popup ? 'p' : 'r') . bin2hex(random_bytes(8)),
@@ -134,8 +147,8 @@ function garmin_exchange_code(string $code): array {
         'grant_type'    => 'authorization_code',
         'code'          => $code,
         'code_verifier' => garmin_pkce_verifier(),
-        'client_id'     => (string)cfg('garmin_client_id', ''),
-        'client_secret' => (string)cfg('garmin_client_secret', ''),
+        'client_id'     => garmin_client_creds()[0],
+        'client_secret' => garmin_client_creds()[1],
         'redirect_uri'  => garmin_redirect_uri(),
     ]);
     if (empty($resp['access_token'])) throw new RuntimeException('Garmin : réponse OAuth inattendue (' . garmin_http_excerpt($resp) . ').');
@@ -157,8 +170,8 @@ function garmin_refresh_token(): void {
     $resp = garmin_http(GARMIN_SSO_TOKEN, [
         'grant_type'    => 'refresh_token',
         'refresh_token' => $rt,
-        'client_id'     => (string)cfg('garmin_client_id', ''),
-        'client_secret' => (string)cfg('garmin_client_secret', ''),
+        'client_id'     => garmin_client_creds()[0],
+        'client_secret' => garmin_client_creds()[1],
     ]);
     if (empty($resp['access_token'])) throw new RuntimeException('Garmin : rafraîchissement du token échoué (' . garmin_http_excerpt($resp) . ').');
     garmin_store_tokens($resp);

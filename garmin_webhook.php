@@ -32,17 +32,32 @@ $raw = (string)file_get_contents('php://input');
 if (trim($raw) === '') garmin_wh_fail(400, 'Corps vide.');
 
 /* IMPORTANT : aucun cfg()/db() ici — pas de session.
-   Authentification = token secret dans l'URL, résolu vers la base utilisateur. */
+   Authentification = token secret dans l'URL. Deux cas :
+     - jeton GLOBAL d'application (app_cfg d'auth.sqlite) : la base utilisateur est résolue
+       via le userId du payload (Garmin l'envoie toujours) ;
+     - jeton PAR UTILISATEUR (installations existantes) : scanné comme avant. */
 $tok = trim((string)($_GET['token'] ?? ''));
-$pdo = garmin_db_for_webhook_token($tok);
-if (!$pdo) garmin_wh_fail(403, 'Token de webhook invalide.');
+$pdo = null;
+$gtok = trim((string)gcfg('garmin_webhook_token', ''));
+if ($gtok !== '' && $tok !== '' && hash_equals($gtok, $tok)) {
+    $j = json_decode($raw, true);
+    $guserId = '';
+    if (is_array($j)) {
+        $guserId = (string)($j['userId'] ?? '');
+        if ($guserId === '' && isset($j[0]) && is_array($j[0])) $guserId = (string)($j[0]['userId'] ?? '');
+    }
+    if ($guserId === '') garmin_wh_fail(400, 'Payload sans userId.');
+    $pdo = garmin_find_db($guserId);
+    if (!$pdo) garmin_wh_fail(403, 'Aucun compte TRQ lié à cet utilisateur Garmin.');
+} else {
+    $pdo = garmin_db_for_webhook_token($tok);
+    if (!$pdo) garmin_wh_fail(403, 'Token de webhook invalide.');
+}
 
-/* Contrôle additionnel : client-id exposé par Garmin dans les en-têtes du push */
+/* Contrôle additionnel : client-id exposé par Garmin dans les en-têtes du push (réglage global) */
 $cid = trim((string)($_SERVER['HTTP_GARMIN_CLIENT_ID'] ?? ''));
 try {
-    $st = $pdo->prepare("SELECT v FROM settings WHERE k='garmin_client_id'");
-    $st->execute();
-    $myCid = trim((string)$st->fetchColumn());
+    $myCid = garmin_client_creds()[0];
     if ($myCid !== '' && $cid !== '' && !hash_equals($myCid, $cid)) garmin_wh_fail(403, 'Client Garmin inconnu.');
 } catch (Throwable $e) {}
 

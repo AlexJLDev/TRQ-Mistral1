@@ -78,12 +78,19 @@ if ($p === 'settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Location: ?p=settings&saved=1');
         exit;
     }
-    foreach (['api_key', 'athlete_id', 'ftp', 'lthr', 'max_hr', 'rest_hr', 'base_hrv', 'weight', 'body_fat', 'garmin_client_id'] as $k) {
+    foreach (['api_key', 'athlete_id', 'ftp', 'lthr', 'max_hr', 'rest_hr', 'base_hrv', 'weight', 'body_fat'] as $k) {
         cfg_set($k, trim($_POST[$k] ?? ''));
     }
-    /* Secret Garmin : write-only — on ne l'écrase que si un nouveau (non vide) est saisi */
-    if (array_key_exists('garmin_client_secret', $_POST) && trim((string)$_POST['garmin_client_secret']) !== '') {
-        cfg_set('garmin_client_secret', trim((string)$_POST['garmin_client_secret']));
+    /* Identifiants OAuth Garmin : réglages APPLICATION (partagés par tous les comptes, table app_cfg
+       d'auth.sqlite) — champs présents uniquement dans le POST quand le bloc est affiché (administrateur) */
+    if (!auth_enabled() || is_admin()) {
+        if (array_key_exists('garmin_client_id', $_POST)) {
+            gcfg_set('garmin_client_id', trim((string)$_POST['garmin_client_id']));
+        }
+        /* Secret : write-only — on ne l'écrase que si un nouveau (non vide) est saisi */
+        if (array_key_exists('garmin_client_secret', $_POST) && trim((string)$_POST['garmin_client_secret']) !== '') {
+            gcfg_set('garmin_client_secret', trim((string)$_POST['garmin_client_secret']));
+        }
     }
     /* SSL : champ présent uniquement dans le POST quand le bloc SSL est affiché (administrateur) */
     if (array_key_exists('ca_bundle', $_POST)) {
@@ -6805,7 +6812,7 @@ if ($p === 'settings') {
           <div class="grid gap-4 sm:grid-cols-2 rounded-lg border p-3" id="garminKeys">
             <div class="field">
               <label class="text-xs font-medium">Client ID (portail développeur Garmin)</label>
-              <input class="input text-sm" type="text" name="garmin_client_id" value="<?= $f('garmin_client_id') ?>" autocomplete="off" placeholder="ex : 4a2b8c…">
+              <input class="input text-sm" type="text" name="garmin_client_id" value="<?= h(garmin_client_creds()[0]) ?>" autocomplete="off" placeholder="ex : 4a2b8c…">
             </div>
             <div class="field">
               <label class="text-xs font-medium">Client Secret</label>

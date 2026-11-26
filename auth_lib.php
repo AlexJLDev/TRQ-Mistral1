@@ -41,12 +41,31 @@ function auth_db(): PDO {
             role TEXT NOT NULL DEFAULT 'user', active INTEGER NOT NULL DEFAULT 1, created_at TEXT, last_login TEXT);
         CREATE TABLE IF NOT EXISTS auth_events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, ip TEXT, email TEXT, at INTEGER);
         CREATE INDEX IF NOT EXISTS idx_auth_events ON auth_events(kind, at);
-        CREATE TABLE IF NOT EXISTS password_resets(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, token_hash TEXT UNIQUE, expires_at INTEGER, used INTEGER DEFAULT 0);");
+        CREATE TABLE IF NOT EXISTS password_resets(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, token_hash TEXT UNIQUE, expires_at INTEGER, used INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS app_cfg(k TEXT PRIMARY KEY, v TEXT);");
         foreach (['ALTER TABLE users ADD COLUMN avatar BLOB', 'ALTER TABLE users ADD COLUMN avatar_mime TEXT', 'ALTER TABLE users ADD COLUMN avatar_ts INTEGER'] as $m) {
             try { $p->exec($m); } catch (\Throwable $e) { }
         }
     }
     return $p;
+}
+
+/* ---------- réglages GLOBAUX de l'application (auth.sqlite, partagés par tous les comptes) ----------
+   Pour les identifiants d'application (ex. client_id/client_secret Garmin délivrés à TRQ sur le
+   portail développeur) : ils ne doivent être saisis qu'une fois, pas par chaque utilisateur.
+   Le secret est chiffré comme pour cfg() (AES-256-GCM, clé data/app.key). */
+function gcfg(string $k, $default = null) {
+    $st = auth_db()->prepare('SELECT v FROM app_cfg WHERE k=?');
+    $st->execute([$k]);
+    $v = $st->fetchColumn();
+    if (is_string($v) && $k === 'garmin_client_secret' && $v !== '') {
+        try { $v = dec_secret($v); } catch (Throwable $e) {}
+    }
+    return ($v === false || $v === '') ? $default : $v;
+}
+function gcfg_set(string $k, string $v): void {
+    if ($k === 'garmin_client_secret' && $v !== '') $v = enc_secret($v);
+    auth_db()->prepare('INSERT INTO app_cfg(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v')->execute([$k, $v]);
 }
 
 function db_path(): string {
