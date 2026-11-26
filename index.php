@@ -6866,7 +6866,11 @@ if ($p === 'settings') {
             gmMsg('garminPermsTxt', 'vérification…', false);
             try {
               const r = await call('garmin_test', {});
-              gmMsg('garminPermsTxt', (r.permissions && r.permissions.length ? r.permissions.join(' · ') : 'aucune permission renvoyée') + (r.user_id ? ' — userId ' + r.user_id : ''), false);
+              let txt = (r.permissions && r.permissions.length ? r.permissions.join(' · ') : 'aucune permission renvoyée') + (r.user_id ? ' — userId ' + r.user_id : '');
+              if (r.probe && typeof r.probe === 'object') {
+                txt += '\n\nSonde Training API :\n' + Object.keys(r.probe).map(k => k + ' → ' + r.probe[k]).join('\n');
+              }
+              gmMsg('garminPermsTxt', txt, false);
             } catch (e) { gmMsg('garminPermsTxt', '✗ ' + e.message, true); }
           });
           async function gmPush(days) {

@@ -323,10 +323,11 @@ try {
         echo json_encode(['ok' => true, 'name' => (string)($a['name'] ?? ($a['firstname'] ?? 'athlète')), 'ssl_verify' => cfg('ssl_verify', '1') !== '0']);
 
     } elseif ($action === 'garmin_test') {
-        /* Vérifie les permissions consenties + récupère le userId Garmin */
+        /* Vérifie les permissions consenties + récupère le userId Garmin + sonde les chemins Training API (diagnostic RouteFailed). */
         if (!garmin_status()['configured']) throw new RuntimeException("Garmin : renseignez d'abord client_id et client_secret dans les Paramètres.");
         $p = garmin_permissions();
-        echo json_encode(['ok' => true, 'user_id' => $p['user_id'], 'permissions' => $p['permissions']]);
+        try { $probe = garmin_probe_training(); } catch (Throwable $pe) { $probe = ['erreur' => $pe->getMessage()]; }
+        echo json_encode(['ok' => true, 'user_id' => $p['user_id'], 'permissions' => $p['permissions'], 'probe' => $probe]);
 
     } elseif ($action === 'garmin_push') {
         /* Pousse les séances planifiées STRUCTURÉES vers Garmin Connect (Training API v2).

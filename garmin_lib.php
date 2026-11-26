@@ -193,6 +193,26 @@ function garmin_permissions(): array {
     return ['user_id' => $uid, 'permissions' => is_array($perms) ? array_values($perms) : [], 'raw' => $j];
 }
 
+/** Sonde Training API : teste les chemins candidats et renvoie path → statut ou erreur.
+    Diagnostique l'erreur « RouteFailed » (HTTP 500) : chemin inexistant OU Training API non activée pour l'app dans le portail. */
+function garmin_probe_training(): array {
+    $out = [];
+    foreach ([
+        '/training-api/api/v2/workout',
+        '/training-api/api/v2/workouts?limit=1',
+        '/training-api/workout',
+        '/training-api/api/v1/workout',
+    ] as $p) {
+        try {
+            $r = garmin_api('GET', $p);
+            $out[$p] = 'OK ' . mb_substr(json_encode($r, JSON_UNESCAPED_UNICODE), 0, 120);
+        } catch (Throwable $e) {
+            $out[$p] = mb_substr($e->getMessage(), 0, 200);
+        }
+    }
+    return $out;
+}
+
 /** Déconnexion : efface toutes les clés Garmin de la base de l'utilisateur. */
 function garmin_disconnect(): void {
     db()->prepare('DELETE FROM settings WHERE k LIKE ?')->execute(['garmin_%']);
