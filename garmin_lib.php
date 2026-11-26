@@ -367,6 +367,18 @@ function garmin_ingest_activity(PDO $pdo, array $it, string $sid, array &$res): 
     $start = (int)($it['startTimeInSeconds'] ?? 0);
     if ($start <= 0) return;
     $gsport = (string)($it['activityType'] ?? '');
+    /* Anti-doublon : la même sortie est peut-être déjà là, importée d'intervals.icu (plus riche : streams, TSS)
+       ou d'un push Garmin précédent → jour + sport + durée proche (±20 % ou ±2 min) = déjà enregistrée, on saute. */
+    $gDur = (int)($it['durationInSeconds'] ?? ($it['movingDurationInSeconds'] ?? 0));
+    try {
+        $chk = $pdo->prepare("SELECT id, duration FROM activities WHERE substr(date,1,10) = ? AND sport = ? AND id <> ?");
+        $chk->execute([date('Y-m-d', $start), garmin_sport_from_type($gsport), 'g-' . $sid]);
+        foreach ($chk->fetchAll() as $ex) {
+            $ed = (int)$ex['duration'];
+            $tol = max(120, (int)round(0.2 * max($gDur, $ed)));
+            if ($ed > 0 && $gDur > 0 && abs($ed - $gDur) <= $tol) { $res['skipped']++; return; }   // déjà présente → pas d'import
+        }
+    } catch (Throwable $e) {}
     $fields = [
         'id'        => 'g-' . $sid,
         'date'      => gmdate('Y-m-d\TH:i:s\Z', $start),

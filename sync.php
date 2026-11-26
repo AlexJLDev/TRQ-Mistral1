@@ -42,6 +42,24 @@ try {
         $pdo->beginTransaction();
         foreach ($list as $a) {
             if (empty($a['start_date_local']) || empty($a['id'])) continue;
+            /* Anti-doublon Garmin : même sortie déjà arrivée par push Garmin (id g-…) →
+               on fusionne en renommant l'id Garmin vers l'id ICU ; l'upsert ci-dessous
+               complète alors la ligne (streams, TSS, FC…) sans créer de doublon. */
+            $icuId = (string)$a['id'];
+            if (!isset($known[$icuId])) {
+                $gd = (int)($a['moving_time'] ?? $a['elapsed_time'] ?? 0);
+                $chk = $pdo->prepare("SELECT id, duration FROM activities WHERE id LIKE 'g-%' AND substr(date,1,10) = substr(?,1,10) AND sport = ?");
+                $chk->execute([(string)$a['start_date_local'], sport_of((string)($a['type'] ?? ''))]);
+                foreach ($chk->fetchAll() as $ex) {
+                    $ed = (int)$ex['duration'];
+                    if ($ed > 0 && $gd > 0 && abs($ed - $gd) <= max(120, (int)round(0.2 * max($ed, $gd)))) {
+                        $pdo->prepare('UPDATE activities SET id = ? WHERE id = ?')->execute([$icuId, $ex['id']]);
+                        $pdo->prepare("UPDATE planned_workouts SET activity_id = ? WHERE activity_id = ?")->execute([$icuId, $ex['id']]);   // répare les liens prévu/réalisé
+                        $known[$icuId] = true;   // pas comptée comme nouvelle ; l'upsert mettra à jour les champs
+                        break;
+                    }
+                }
+            }
             $ins->execute([
                 (string)$a['id'],
                 $a['start_date_local'],
