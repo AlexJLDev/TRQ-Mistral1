@@ -6840,7 +6840,7 @@ if ($p === 'settings') {
               <li>Liaison du compte : <?= $gs['connected'] ? '✓ connecté' : 'pas encore liée' ?></li>
               <li>URL de rappel OAuth à enregistrer chez Garmin : <code class="rounded bg-muted px-1"><?= h(garmin_redirect_uri()) ?></code> (OAuth 2.0 + PKCE)</li>
               <li>URL de rappel webhook push (tous les endpoints) : <code class="rounded bg-muted px-1">garmin_webhook.php?token=…</code> — Garmin pousse, TRQ importe et répond ACK.</li>
-              <li>Envoi des séances : Training API v2 (<code>apis.garmin.com/training-api</code>) — en cas d'erreur, le détail est affiché dans la ligne « Envoyer » ci-dessus.</li>
+              <li>Envoi des séances : Training API (<code>apis.garmin.com/training-api</code>) — en cas d'erreur, le détail est affiché dans la ligne « Envoyer » ci-dessus.</li>
             </ul>
           </details>
           <?php endif; ?>

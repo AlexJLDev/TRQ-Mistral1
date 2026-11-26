@@ -7,7 +7,7 @@
      1. SANTÉ / ACTIVITÉS (Health + Activity API)  → Garmin POUSSE les données
         vers les URLs de rappel (webhooks) enregistrées dans le portail
         développeur → endpoint TRQ : garmin_webhook.php (ACK + import).
-     2. ENTRAÎNEMENTS (Training API v2)            → TRQ PUSSE les séances
+     2. ENTRAÎNEMENTS (Training API)            → TRQ PUSSE les séances
         structurées vers le calendrier Garmin Connect ; la montre les récupère
         à la synchro suivante (POST /training-api/api/v2/workout
         + planification à une date).
@@ -226,41 +226,43 @@ function garmin_disconnect(): void {
 }
 
 /* ================================================================================
-   PUSH SÉANCES STRUCTURÉES — Training API v2
+   PUSH SÉANCES STRUCTURÉES — Training API (workout-portal)
    ================================================================================ */
 
-/** TRQ sport + mode → [sport Garmin (constante de haut niveau), sportTypeKey]. */
+/** TRQ sport → [sportTypeId Garmin, sportTypeKey] (IDs depuis /workout-service/workout/types). */
 function garmin_sport_map(string $sport, string $tssType = 'power'): array {
     return match ($sport) {
-        'run'   => ['RUNNING', 'running'],
-        'swim'  => ['SWIMMING', 'swimming'],
-        default => ['CYCLING', 'cycling'],
+        'run'   => [1, 'running'],
+        'swim'  => [4, 'swimming'],
+        default => [2, 'cycling'],
     };
 }
 
-/** Type de bloc TRQ → stepTypeKey Garmin. */
-function garmin_step_type(string $kind): string {
+/** Type de bloc TRQ → [stepTypeId, stepTypeKey] Garmin (warmup=1, cooldown=2, interval=3, recovery=4). */
+function garmin_step_type(string $kind): array {
     return match ($kind) {
-        'warmup'         => 'WARM_UP',
-        'work', 'steady' => 'ACTIVE',
-        'rest'           => 'REST',
-        'cooldown'       => 'COOL_DOWN',
-        default          => 'ACTIVE',
+        'warmup'         => [1, 'warmup'],
+        'work', 'steady' => [3, 'interval'],
+        'rest'           => [4, 'recovery'],
+        'cooldown'       => [2, 'cooldown'],
+        default          => [3, 'interval'],
     };
 }
 
 /**
  * Convertit une structure TRQ ([{kind, dur (s), lo, hi (%), ramp?, reps?, steps?}])
- * en WorkoutSteps Training API v2. Cibles : % FTP (vélo) en cible structurée ;
- * pour la course/natation, les cibles sont mises dans la description de l'étape
- * (les cibles d'allure Garmin exigent des seuils propres au sport — plus sûr pour
- * une première version du branchement).
+ * en WorkoutSteps au format workout-portal (nouveau Garmin Connect — schéma vérifié via
+ * python-garminconnect) : stepType/endCondition = {id, key, displayOrder}, endConditionValue
+ * HORS du bloc endCondition, cible {workoutTargetTypeId, workoutTargetTypeKey}.
+ * Vélo en mode puissance → cible puissance personnalisée en WATTS (FTP de l'athlète) ;
+ * course/natation et mode FC → consigne en description (plus sûr pour cette version).
  */
 function garmin_structure_to_steps(array $struct, string $sport): array {
     $steps = [];
-    $sid = 0;
-    $push = function (array $blk, string $sport) use (&$steps, &$sid) {
-        $sid++;
+    $order = 0;
+    $ftp = (float)cfg('ftp', 0);
+    $push = function (array $blk) use (&$steps, &$order, $sport, $ftp) {
+        $order++;
         $dur = max(1, (int)round((float)($blk['dur'] ?? 0)));
         $lo = (float)($blk['lo'] ?? 0);
         $hi = (float)($blk['hi'] ?? 0);
@@ -268,55 +270,65 @@ function garmin_structure_to_steps(array $struct, string $sport): array {
         $pct = ($lo > 0 || $hi > 0) ? ($lo === $hi ? "$lo %" : "$lo → $hi %") : '';
         if ($lo > 0 && $hi > 0 && $hi > $lo && (int)round($dur / 30) > 3) $pct .= ' (progressif)';
         $desc = $pct !== '' ? 'Intensité ' . $pct . ' de la cible' : '';
+        [$stid, $stkey] = garmin_step_type((string)($blk['kind'] ?? 'work'));
         $s = [
-            'type'         => 'ExecutableStepDTO',
-            'stepId'       => $sid,
-            'stepOrder'    => count($steps) + 1,
-            'stepType'     => ['stepTypeKey' => garmin_step_type((string)($blk['kind'] ?? 'work'))],
-            'endCondition' => ['conditionTypeKey' => 'time', 'conditionValue' => $dur],
+            'stepOrder'    => $order,
+            'stepType'    => ['stepTypeId' => $stid, 'stepTypeKey' => $stkey, 'displayOrder' => $stid],
+            'endCondition' => ['conditionTypeId' => 2, 'conditionTypeKey' => 'time', 'displayOrder' => 2, 'displayable' => true],
+            'endConditionValue' => $dur,
+            'targetType'   => ['workoutTargetTypeId' => 1, 'workoutTargetTypeKey' => 'no.target', 'displayOrder' => 1],
         ];
         if ($desc !== '') $s['description'] = $desc;
-        /* Cible puissance en % FTP — uniquement pour le vélo (vocabulaire propre au sport) */
-        if ($sport === 'CYCLING' && $hi > 0 && !in_array((string)($blk['kind'] ?? ''), ['warmup', 'cooldown'], true)) {
-            $target = fn ($v) => ['valueTypeKey' => 'percentFTP', 'value' => round($v, 1)];
-            $s['targetValueOne'] = $target($lo > 0 ? $lo : $hi);
-            if ($hi > $lo) $s['targetValueTwo'] = $target($hi);
+        /* Vélo puissance : cible personnalisée en watts (power.zone). Warmup/Cooldown = rampe libre. */
+        if ($sport === 'cycling' && $hi > 0 && !in_array((string)($blk['kind'] ?? ''), ['warmup', 'cooldown'], true) && $ftp > 0) {
+            $s['targetType'] = ['workoutTargetTypeId' => 2, 'workoutTargetTypeKey' => 'power.zone', 'displayOrder' => 1];
+            $s['targetValueOne'] = round(($lo > 0 ? $lo : $hi) / 100 * $ftp);
+            if ($hi > $lo) $s['targetValueTwo'] = round($hi / 100 * $ftp);
         }
         $steps[] = $s;
     };
     foreach ($struct as $blk) {
-        $kind = (string)($blk['kind'] ?? '');
         if (!empty($blk['reps']) && (int)$blk['reps'] > 1 && !empty($blk['steps']) && is_array($blk['steps'])) {
-            $sid++;
+            $order++;
             $inner = [];
             foreach ($blk['steps'] as $c) {
-                $push($c, $sport);
+                $push($c);
                 $inner[] = array_pop($steps);
             }
             $steps[] = [
                 'type'               => 'RepeatGroupDTO',
-                'stepId'             => $sid,
-                'stepOrder'          => count($steps) + 1,
-                'stepType'           => ['stepTypeKey' => 'REPEAT'],
+                'stepOrder'          => $order,
+                'stepType'           => ['stepTypeId' => 6, 'stepTypeKey' => 'repeat', 'displayOrder' => 6],
                 'numberOfIterations' => (int)$blk['reps'],
+                'endCondition'       => ['conditionTypeId' => 7, 'conditionTypeKey' => 'iterations', 'displayOrder' => 7, 'displayable' => false],
+                'endConditionValue'  => (float)(int)$blk['reps'],
                 'workoutSteps'       => $inner,
             ];
         } else {
-            $push($blk, $sport);
+            $push($blk);
         }
     }
     return $steps;
 }
 
-/** Structure TRQ → payload Training API v2 complet (nom, sport, segments, steps). */
+/** Structure TRQ → payload Training API complet (nom, sportType, durée estimée, segments, steps). */
 function garmin_build_workout(array $plan): array {
     $struct = json_decode((string)($plan['structure'] ?? ''), true) ?: [];
     if (!$struct) throw new RuntimeException('Garmin : séance sans structure — rien à exporter.');
-    [$sportConst, $sportKey] = garmin_sport_map((string)($plan['sport'] ?? 'ride'), (string)($plan['tss_type'] ?? 'power'));
+    [$sportId, $sportKey] = garmin_sport_map((string)($plan['sport'] ?? 'ride'), (string)($plan['tss_type'] ?? 'power'));
+    $sportType = ['sportTypeId' => $sportId, 'sportTypeKey' => $sportKey, 'displayOrder' => $sportId];
+    /* Durée estimée = somme des durées (les répétitions multipliées) */
+    $est = 0;
+    foreach ($struct as $blk) {
+        $reps = (!empty($blk['reps']) && (int)$blk['reps'] > 1 && !empty($blk['steps']) && is_array($blk['steps'])) ? (int)$blk['reps'] : 1;
+        $sub = (!empty($blk['steps']) && is_array($blk['steps'])) ? array_sum(array_map(fn ($c) => (float)($c['dur'] ?? 0), $blk['steps'])) : (float)($blk['dur'] ?? 0);
+        $est += (int)round($sub * $reps);
+    }
     return [
-        'workoutName'     => trim((string)($plan['title'] ?? 'Séance TRQ')),
-        'sport'           => $sportConst,
-        'workoutSegments' => [['sportType' => ['sportTypeKey' => $sportKey], 'workoutSteps' => garmin_structure_to_steps($struct, $sportConst)]],
+        'workoutName'             => trim((string)($plan['title'] ?? 'Séance TRQ')),
+        'sportType'               => $sportType,
+        'estimatedDurationInSecs' => max(60, $est),
+        'workoutSegments'         => [['segmentOrder' => 1, 'sportType' => $sportType, 'workoutSteps' => garmin_structure_to_steps($struct, $sportKey)]],
     ];
 }
 
