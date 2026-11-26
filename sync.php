@@ -296,6 +296,35 @@ try {
         $a = icu_get('/athlete/' . athlete_id());
         echo json_encode(['ok' => true, 'name' => (string)($a['name'] ?? ($a['firstname'] ?? 'athlète')), 'ssl_verify' => cfg('ssl_verify', '1') !== '0']);
 
+    } elseif ($action === 'garmin_test') {
+        /* Vérifie les permissions consenties + récupère le userId Garmin */
+        if (!garmin_status()['configured']) throw new RuntimeException("Garmin : renseignez d'abord client_id et client_secret dans les Paramètres.");
+        $p = garmin_permissions();
+        echo json_encode(['ok' => true, 'user_id' => $p['user_id'], 'permissions' => $p['permissions']]);
+
+    } elseif ($action === 'garmin_push') {
+        /* Pousse les séances planifiées STRUCTURÉES vers Garmin Connect (Training API v2).
+           days = fenêtre (0 = aujourd'hui seulement, défaut 7) ; force = repousser même déjà envoyées. */
+        $gdays = max(0, (int)($_POST['days'] ?? 7));
+        $gforce = (string)($_POST['force'] ?? '') === '1';
+        $gLimit = $gdays > 0 ? date('Y-m-d', strtotime("+$gdays days")) : date('Y-m-d');
+        $gRes = [];
+        $gPlans = $pdo->prepare("SELECT id, date, title, sport, tss_type FROM planned_workouts WHERE completed=0 AND (activity_id IS NULL OR activity_id='') AND structure IS NOT NULL AND structure <> '' AND substr(date,1,10) <= ? ORDER BY substr(date,1,10), id");
+        $gPlans->execute([$gLimit]);
+        $gPushed = json_decode((string)cfg('garmin_pushed', '{}'), true) ?: [];
+        foreach ($gPlans->fetchAll() as $gp) {
+            $gpid = (int)$gp['id'];
+            if (!$gforce && isset($gPushed[$gpid]) && ($gPushed[$gpid]['date'] ?? '') === substr((string)$gp['date'], 0, 10)) continue;  // déjà poussée à cette date
+            try {
+                $r = garmin_push_workout($gpid);
+                $gRes[] = ['id' => $gpid, 'name' => $r['name'], 'date' => $r['date'], 'gid' => $r['gid'], 'ok' => true];
+            } catch (Throwable $ge) {
+                $gRes[] = ['id' => $gpid, 'name' => (string)$gp['title'], 'date' => (string)$gp['date'], 'ok' => false, 'error' => $ge->getMessage()];
+            }
+        }
+        echo json_encode(['ok' => true, 'pushed' => count(array_filter($gRes, fn ($x) => $x['ok'])), 'results' => $gRes,
+            'window' => $gdays === 0 ? "aujourd'hui" : "$gdays jours"]);
+
     } elseif ($action === 'fetch_gps') {
         echo json_encode(['ok' => true, 'gps' => gps_for_activity((string)($_POST['id'] ?? ''))]);
 

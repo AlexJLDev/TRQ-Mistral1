@@ -27,8 +27,8 @@ if (isset($_GET['code'])) {
     try {
         if (!$gs['configured']) throw new RuntimeException('Connexion Garmin non configurée.');
         garmin_exchange_code((string)$_GET['code']);
-        /* Identifiant affiché après liaison (affiné par la future synchro) */
-        cfg_set('garmin_user_display', 'Garmin Connect');
+        /* userId + permissions consenties (non bloquant si l'endpoint n'est pas encore actif côté Starter) */
+        try { garmin_permissions(); } catch (Throwable $pe) { try { cfg_set('garmin_permissions', json_encode(['err' => $pe->getMessage()], JSON_UNESCAPED_UNICODE)); } catch (Throwable $pe2) {} }
         header('Location: ?p=settings&garmin=1#connexion-garmin');
     } catch (Throwable $e) {
         header('Location: ?p=settings&err=' . urlencode($e->getMessage()));

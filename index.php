@@ -78,8 +78,12 @@ if ($p === 'settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Location: ?p=settings&saved=1');
         exit;
     }
-    foreach (['api_key', 'athlete_id', 'ftp', 'lthr', 'max_hr', 'rest_hr', 'base_hrv', 'weight', 'body_fat'] as $k) {
+    foreach (['api_key', 'athlete_id', 'ftp', 'lthr', 'max_hr', 'rest_hr', 'base_hrv', 'weight', 'body_fat', 'garmin_client_id'] as $k) {
         cfg_set($k, trim($_POST[$k] ?? ''));
+    }
+    /* Secret Garmin : write-only — on ne l'écrase que si un nouveau (non vide) est saisi */
+    if (array_key_exists('garmin_client_secret', $_POST) && trim((string)$_POST['garmin_client_secret']) !== '') {
+        cfg_set('garmin_client_secret', trim((string)$_POST['garmin_client_secret']));
     }
     /* SSL : champ présent uniquement dans le POST quand le bloc SSL est affiché (administrateur) */
     if (array_key_exists('ca_bundle', $_POST)) {
@@ -6590,7 +6594,7 @@ if ($p === 'settings') {
 
       <nav class="flex flex-wrap gap-2 text-xs">
         <a href="#compte" class="rounded-full border px-3 py-1 hover:bg-muted">👤 Mon compte</a>
-        <a href="#connexion-icu" class="rounded-full border px-3 py-1 hover:bg-muted">🔗 Connexions</a>
+        <a href="#connexions" class="rounded-full border px-3 py-1 hover:bg-muted">🔗 Connexions</a>
         <a href="#entrainement" class="rounded-full border px-3 py-1 hover:bg-muted">🏋️ Entraînement</a>
         <?php if (auth_enabled()): ?><a href="#coach" class="rounded-full border px-3 py-1 hover:bg-muted">🎓 Module coach</a><?php endif; ?>
       </nav>
@@ -6614,7 +6618,7 @@ if ($p === 'settings') {
 
       <?php if (isset($_GET['garmin'])): ?>
         <?php if ((int)$_GET['garmin'] === 1): ?>
-        <div class="alert"><h3>Compte Garmin Connect lié ✅</h3><p class="text-xs text-muted-foreground">La synchronisation Garmin (séances, sommeil, FC repos, HRV) sera activée automatiquement dès l'ouverture des flux.</p></div>
+        <div class="alert"><h3>Compte Garmin Connect lié ✅</h3><p class="text-xs text-muted-foreground">Reste 2 étapes : ① enregistrer l'URL du webhook (affichée dans la carte Garmin) sur les endpoints push du portail Garmin — c'est elle qui fera arriver séances, sommeil, FC repos et HRV ; ② « Envoyer (7 j) » pour pousser tes séances structurées vers la montre.</p></div>
         <?php else: ?>
         <div class="alert"><h3>Garmin déconnecté</h3><p class="text-xs text-muted-foreground">Aucune donnée Garmin n'est conservée : les clés d'accès ont été supprimées de ta base.</p></div>
         <?php endif; ?>
@@ -6697,6 +6701,11 @@ if ($p === 'settings') {
       <?php endif; ?>
 
       <form method="post" class="space-y-6">
+        <div id="connexions" class="scroll-mt-20 space-y-3">
+          <div>
+            <h2 class="text-lg font-semibold tracking-tight">Connexions</h2>
+            <p class="text-xs text-muted-foreground">Un service par carte : séances, données de santé, envoi des entraînements structurés</p>
+          </div>
         <div id="connexion-icu" class="card p-6 space-y-4 scroll-mt-20">
           <header>
             <h3 class="text-base font-semibold">Connexion intervals.icu</h3>
@@ -6746,16 +6755,16 @@ if ($p === 'settings') {
             <div class="flex items-center gap-3">
               <span class="flex size-9 items-center justify-center rounded-lg bg-sky-500/15 text-lg">⌚</span>
               <div>
-                <h3 class="text-base font-semibold">Connexion Garmin</h3>
-                <p class="text-xs text-muted-foreground">Socle prêt : la liaison s'activera dès l'attribution des accès développeur Garmin</p>
+                <h3 class="text-base font-semibold">Garmin Connect</h3>
+                <p class="text-xs text-muted-foreground">Accès Starter activé — santé &amp; activités en push, envoi des séances structurées vers la montre</p>
               </div>
             </div>
-            <span class="badge" data-variant="<?= $gs['connected'] ? 'default' : 'outline' ?>"><?= $gs['connected'] ? 'Connecté' : 'En préparation' ?></span>
+            <span class="badge" data-variant="<?= $gs['connected'] ? 'default' : 'outline' ?>"><?= $gs['connected'] ? '✔ Connecté' : ($gs['configured'] ? 'Prêt à connecter' : 'Clés à renseigner') ?></span>
           </header>
 
           <?php if ($gs['connected']): ?>
           <div class="flex flex-wrap items-center gap-3 rounded-lg border p-3 text-sm">
-            <span>Compte lié : <b><?= $gs['display'] !== '' ? h($gs['display']) : 'Garmin Connect' ?></b></span>
+            <span>Compte lié : <b><?= $gs['display'] !== '' ? h($gs['display']) : 'Garmin Connect' ?></b><?= $gs['user_id'] !== '' ? ' <span class="text-xs text-muted-foreground">· ' . h($gs['user_id']) . '</span>' : '' ?></span>
             <?php if ($gs['expires_at']): ?><span class="text-xs text-muted-foreground">token valable jusqu'au <?= date('d/m H:i', (int)$gs['expires_at']) ?></span><?php endif; ?>
             <a class="btn ml-auto" data-variant="destructive" data-size="sm" href="oauth_garmin.php?disconnect=1">Déconnecter</a>
           </div>
@@ -6764,18 +6773,59 @@ if ($p === 'settings') {
             <div class="rounded-lg border p-3"><p class="text-sm font-medium">🚴 Séances détaillées</p><p class="text-xs text-muted-foreground">Import de l'activité : puissance, FC, allures, zones, traces GPS.</p></div>
             <div class="rounded-lg border p-3"><p class="text-sm font-medium">😴 Sommeil & bien-être</p><p class="text-xs text-muted-foreground">Sommeil et récupération issus de la montre, en complément d'intervals.icu.</p></div>
             <div class="rounded-lg border p-3"><p class="text-sm font-medium">❤️ FC repos & HRV rMSSD</p><p class="text-xs text-muted-foreground">Alimente la baseline de récupération utilisée par la forme du jour.</p></div>
-            <div class="rounded-lg border p-3"><p class="text-sm font-medium">🔄 Pull + webhook</p><p class="text-xs text-muted-foreground">Récupération à la demande et notification push Garmin en temps réel.</p></div>
+            <div class="rounded-lg border p-3"><p class="text-sm font-medium">🔄 Push temps réel</p><p class="text-xs text-muted-foreground">Garmin pousse chaque séance et chaque résumé santé dès la synchro de la montre (mode Starter).</p></div>
           </div>
+          <?php if (!auth_enabled() || (($cu['role'] ?? '') === 'admin')): ?>
+          <div class="grid gap-4 sm:grid-cols-2 rounded-lg border p-3" id="garminKeys">
+            <div class="field">
+              <label class="text-xs font-medium">Client ID (portail développeur Garmin)</label>
+              <input class="input text-sm" type="text" name="garmin_client_id" value="<?= $f('garmin_client_id') ?>" autocomplete="off" placeholder="ex : 4a2b8c…">
+            </div>
+            <div class="field">
+              <label class="text-xs font-medium">Client Secret</label>
+              <input class="input text-sm" type="password" name="garmin_client_secret" value="" autocomplete="new-password" placeholder="<?= $gs['configured'] ? 'déjà enregistré — laisser vide pour conserver' : 'à renseigner' ?>">
+              <p class="text-[11px] text-muted-foreground">Champ write-only : ne le remplis que pour définir/remplacer le secret. Puis « Enregistrer » en bas de page, et « Connecter mon compte Garmin ».</p>
+            </div>
+          </div>
+          <?php endif; ?>
           <p class="text-[11px] text-muted-foreground">Données stockées uniquement dans ta base TRQ locale. Liaison révocable à tout moment depuis cette carte.</p>
           <?php endif; ?>
+
+          <!-- Une ligne par flux (à la intervals.icu) -->
+          <div class="rounded-lg border divide-y">
+            <div class="p-3">
+              <p class="text-sm font-medium">📥 Recevoir les données de santé &amp; activités</p>
+              <p class="text-xs text-muted-foreground">Push Garmin → TRQ (séances, sommeil, FC repos, HRV, poids). Dernière réception : <?= !empty($gs['webhook_last']['when']) ? date('d/m H:i', (int)$gs['webhook_last']['when']) : '— en attente du premier push' ?><?php if (!empty($gs['webhook_last']['res']['activities']) || !empty($gs['webhook_last']['res']['wellness'])): ?> · <?= (int)$gs['webhook_last']['res']['activities'] ?> séance(s), <?= (int)$gs['webhook_last']['res']['wellness'] ?> résumé(s) santé<?php endif ?></p>
+              <p class="mt-1 text-[11px] text-muted-foreground break-all">URL à enregistrer dans le portail Garmin sur <b>tous</b> les endpoints push : <code class="rounded bg-muted px-1" id="garminWebhookUri"><?= h(garmin_webhook_uri()) ?></code></p>
+            </div>
+            <div class="p-3 flex items-center justify-between gap-3 flex-wrap">
+              <div class="min-w-0">
+                <p class="text-sm font-medium">📤 Envoyer les entraînements planifiés</p>
+                <p class="text-xs text-muted-foreground">Séances structurées TRQ → calendrier Garmin Connect → montre à la synchro suivante</p>
+                <p class="text-xs text-destructive whitespace-pre-line" id="garminPushMsg"></p>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <button type="button" class="btn" data-variant="ghost" data-size="sm" id="garminPushAllBtn" <?= $gs['connected'] ? '' : 'disabled' ?>>Envoyer (30 j)</button>
+                <button type="button" class="btn" data-size="sm" id="garminPushBtn" <?= $gs['connected'] ? '' : 'disabled' ?>>Envoyer (7 j)</button>
+              </div>
+            </div>
+            <div class="p-3 flex items-center justify-between gap-3 flex-wrap">
+              <div class="min-w-0">
+                <p class="text-sm font-medium">🔑 Autorisations Garmin</p>
+                <p class="text-xs text-muted-foreground" id="garminPermsTxt"><?= !empty($gs['permissions']) && empty($gs['permissions']['err']) ? h(implode(' · ', array_map('strval', $gs['permissions']))) : 'non encore vérifiées' ?></p>
+              </div>
+              <button type="button" class="btn shrink-0" data-variant="outline" data-size="sm" id="garminTestBtn" <?= $gs['connected'] ? '' : 'disabled' ?>>Vérifier</button>
+            </div>
+          </div>
 
           <details class="rounded-lg border p-3">
             <summary class="cursor-pointer text-sm font-medium">Statut technique</summary>
             <ul class="mt-2 space-y-1 text-xs text-muted-foreground">
-              <li>Accès développeur Garmin : <?= $gs['configured'] ? '✓ clés configurées' : 'en attente d\'attribution (formulaire soumis)' ?></li>
+              <li>Clés développeur Garmin : <?= $gs['configured'] ? '✓ configurées' : 'à renseigner ci-dessus' ?></li>
               <li>Liaison du compte : <?= $gs['connected'] ? '✓ connecté' : 'pas encore liée' ?></li>
-              <li>URL de rappel OAuth à enregistrer chez Garmin : <code class="rounded bg-muted px-1"><?= h(garmin_redirect_uri()) ?></code></li>
-              <li>Endpoint de rappel <code>oauth_garmin.php</code> et socle <code>garmin_lib.php</code> en place — aucun appel réseau tant que les clés sont absentes.</li>
+              <li>URL de rappel OAuth à enregistrer chez Garmin : <code class="rounded bg-muted px-1"><?= h(garmin_redirect_uri()) ?></code> (OAuth 2.0 + PKCE)</li>
+              <li>URL de rappel webhook push (tous les endpoints) : <code class="rounded bg-muted px-1">garmin_webhook.php?token=…</code> — Garmin pousse, TRQ importe et répond ACK.</li>
+              <li>Envoi des séances : Training API v2 (<code>apis.garmin.com/training-api</code>) — en cas d'erreur, le détail est affiché dans la ligne « Envoyer » ci-dessus.</li>
             </ul>
           </details>
 
@@ -6787,6 +6837,40 @@ if ($p === 'settings') {
             <?php endif; ?>
           </div>
         </div>
+        <script>
+        (function () {
+          function gmMsg(id, txt, err) {
+            const el = document.getElementById(id);
+            el.textContent = txt;
+            el.className = 'text-xs whitespace-pre-line ' + (err ? 'text-destructive' : 'text-emerald-600 dark:text-emerald-400');
+          }
+          const gmTest = document.getElementById('garminTestBtn');
+          gmTest?.addEventListener('click', async () => {
+            gmMsg('garminPermsTxt', 'vérification…', false);
+            try {
+              const r = await call('garmin_test', {});
+              gmMsg('garminPermsTxt', (r.permissions && r.permissions.length ? r.permissions.join(' · ') : 'aucune permission renvoyée') + (r.user_id ? ' — userId ' + r.user_id : ''), false);
+            } catch (e) { gmMsg('garminPermsTxt', '✗ ' + e.message, true); }
+          });
+          async function gmPush(days) {
+            gmMsg('garminPushMsg', 'envoi vers Garmin Connect…', false);
+            try {
+              const r = await call('garmin_push', {days: days});
+              const fails = (r.results || []).filter(x => !x.ok);
+              let txt = r.pushed + ' séance(s) envoyée(s) vers Garmin Connect (' + r.window + ').';
+              if (fails.length) txt += '\nÉchecs :\n' + fails.map(x => (x.name || 'séance') + ' — ' + (x.error || '?')).join('\n');
+              gmMsg('garminPushMsg', txt, fails.length > 0);
+            } catch (e) { gmMsg('garminPushMsg', '✗ ' + e.message, true); }
+          }
+          document.getElementById('garminPushBtn')?.addEventListener('click', () => gmPush(7));
+          document.getElementById('garminPushAllBtn')?.addEventListener('click', () => gmPush(30));
+          const gwu = document.getElementById('garminWebhookUri');
+          gwu?.addEventListener('click', async () => {
+            try { await navigator.clipboard.writeText(gwu.textContent.trim()); gwu.title = '✓ copié'; } catch (e) {}
+          });
+        })();
+        </script>
+        </div><!-- /#connexions -->
 
         <div id="entrainement" class="card p-6 space-y-4 scroll-mt-20">
           <header>
