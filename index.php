@@ -1027,16 +1027,54 @@ if ($p === 'dashboard') {
       </div>
     </div>
 
-    <!-- KPIs -->
-    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+    <!-- KPIs : 3 cartes métriques avec sparkline (Forme bleu app · Fatigue rouge rosé · Fraîcheur orange) -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
       <?php
       $icoCtl = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>';
       $icoAtl = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>';
       $icoTsb = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2V9.6a4.6 4.6 0 0 1 7-3.9l1.4.9a2.5 2.5 0 0 0 2-.4z"/><path d="M2 12h13.5a2.5 2.5 0 0 1 0 5H12"/></svg>';
       $chip = fn($svg, string $bg, string $fg) => '<span class="inline-flex items-center justify-center size-6 rounded-md shrink-0 ' . $bg . ' ' . $fg . '">' . $svg . '</span>';
-      stat_card('Forme (CTL)', '<span class="text-[#0f3ab2] dark:text-[#6b8cf0]">' . n($cur['ctl'], 1) . '</span>', 'Rampe 7j : ' . sprintf('%+.1f', $cur['ctl'] - $prev['ctl']), $chip($icoCtl, 'bg-[#0f3ab2]/10', 'text-[#0f3ab2] dark:text-[#6b8cf0]'));
-      stat_card('Fatigue (ATL)', '<span class="text-rose-600 dark:text-rose-400">' . n($cur['atl'], 1) . '</span>', 'Moyenne 7 jours', $chip($icoAtl, 'bg-rose-500/10', 'text-rose-600 dark:text-rose-400'));
-      stat_card('Fraîcheur (TSB)', '<span class="text-amber-600 dark:text-amber-400">' . n($tsb, 1) . '</span>', '<span ' . $state[1] . '>' . $state[0] . '</span>', $chip($icoTsb, 'bg-amber-500/10', 'text-amber-600 dark:text-amber-400'));
+      $dCtl = $cur['ctl'] - $prev['ctl']; $dAtl = $cur['atl'] - $prev['atl']; $dTsb = $tsb - $prev['tsb'];
+      $tr = fn($d) => '<span class="inline-flex items-center gap-1 text-[11px] font-semibold ' . ($d >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500 dark:text-rose-400') . '">' . ($d >= 0 ? '▲ +' : '▼ −') . n(abs($d), 1) . '<span class="font-normal text-muted-foreground">7j</span></span>';
+      $spark = fn(string $id) => '<div class="mt-2 h-10 -mx-1"><canvas id="' . $id . '" aria-hidden="true"></canvas></div>';
+      ?>
+      <div class="card p-4">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Forme (CTL)</p>
+            <p class="mt-1 text-2xl font-bold tabular-nums text-[#0f3ab2] dark:text-[#6b8cf0]"><?= n($cur['ctl'], 1) ?></p>
+            <p class="mt-0.5"><?= $tr($dCtl) ?></p>
+          </div>
+          <?= $chip($icoCtl, 'bg-[#0f3ab2]/10', 'text-[#0f3ab2] dark:text-[#6b8cf0]') ?>
+        </div>
+        <?= $spark('sparkCtl') ?>
+      </div>
+      <div class="card p-4">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Fatigue (ATL)</p>
+            <p class="mt-1 text-2xl font-bold tabular-nums text-rose-600 dark:text-rose-400"><?= n($cur['atl'], 1) ?></p>
+            <p class="mt-0.5"><?= $tr($dAtl) ?></p>
+          </div>
+          <?= $chip($icoAtl, 'bg-rose-500/10', 'text-rose-600 dark:text-rose-400') ?>
+        </div>
+        <?= $spark('sparkAtl') ?>
+      </div>
+      <div class="card p-4">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Fraîcheur (TSB)</p>
+            <p class="mt-1 text-2xl font-bold tabular-nums text-amber-600 dark:text-amber-400"><?= n($tsb, 1) ?></p>
+            <p class="mt-0.5"><?= '<span ' . $state[1] . '>' . $state[0] . '</span>' ?></p>
+          </div>
+          <?= $chip($icoTsb, 'bg-amber-500/10', 'text-amber-600 dark:text-amber-400') ?>
+        </div>
+        <?= $spark('sparkTsb') ?>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+      <?php
       stat_card('7 derniers jours', n($w7['t']) . ' TSS', fmt_dur((int)$w7['d']) . ' · ' . n($w7['km'] / 1000) . ' km');
       stat_card('FTP réglé', n($ftp) . ' W', $weight ? n($ftp / $weight, 2) . ' W/kg' : 'Poids non défini');
       if ($todayWell) {
@@ -1067,8 +1105,8 @@ if ($p === 'dashboard') {
     <div class="card" id="pmcCard">
       <header class="p-4 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-2">
         <div>
-          <h3 class="text-base font-semibold">PMC Coggan — TSS</h3>
-          <p class="text-xs text-muted-foreground">Forme (CTL 42 j), fatigue (ATL 7 j), charge quotidienne, et fraîcheur (TSB) par zones de Coggan</p>
+          <h3 class="text-base font-semibold">Évolution de la forme <span class="text-xs font-normal text-muted-foreground">· PMC Coggan</span></h3>
+          <p class="text-xs text-muted-foreground">Forme <span class="text-[#0f3ab2] dark:text-[#6b8cf0] font-medium">CTL</span> (42 j), fatigue <span class="text-rose-600 dark:text-rose-400 font-medium">ATL</span> (7 j), charge quotidienne, et fraîcheur <span class="text-amber-600 dark:text-amber-400 font-medium">TSB</span> par zones de Coggan</p>
         </div>
         <div class="flex items-center gap-1 flex-wrap sm:flex-nowrap" id="pmcRange" role="group" aria-label="Période">
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="90">3 mois</button>
@@ -1248,6 +1286,22 @@ if ($p === 'dashboard') {
             ? {ctl: '#6b8cf0', atl: '#fb7185', tsb: '#f59e0b', bar: 'rgba(61,98,224,.35)', grid: 'rgba(148,163,184,.13)', txt: '#7b8aa0'}
             : {ctl: '#0f3ab2', atl: '#e11d48', tsb: '#d97706', bar: 'rgba(15,58,178,.22)', grid: 'rgba(100,116,139,.20)', txt: '#64748b'};
         card.style.setProperty('--pmc-ctl', C.ctl); card.style.setProperty('--pmc-atl', C.atl); card.style.setProperty('--pmc-bar', C.bar);
+        /* Sparklines des 3 cartes métriques (30 derniers jours, couleurs de référence) */
+        if (PM_KEYS.length) {
+            const SPARKS = [
+                ['sparkCtl', 'ctl', C.ctl, dark ? 'rgba(61,98,224,.18)' : 'rgba(15,58,178,.12)'],
+                ['sparkAtl', 'atl', C.atl, dark ? 'rgba(251,113,133,.18)' : 'rgba(225,29,72,.12)'],
+                ['sparkTsb', 'tsb', C.tsb, dark ? 'rgba(245,158,11,.18)' : 'rgba(217,119,6,.12)'],
+            ];
+            for (const [id, key, col, fill] of SPARKS) {
+                const cv = document.getElementById(id); if (!cv) continue;
+                const data = PM_KEYS.slice(-30).map(k => PM_ALL[k][key]);
+                new Chart(cv, {type: 'line', data: {labels: data.map((_, i) => i), datasets: [{data, borderColor: col, backgroundColor: fill, fill: true, borderWidth: 2, pointRadius: 0, tension: 0.35}]},
+                    options: {responsive: true, maintainAspectRatio: false, animation: false,
+                        plugins: {legend: {display: false}, tooltip: {enabled: false}},
+                        scales: {x: {display: false}, y: {display: false}}}});
+            }
+        }
         const ZONES = [   // seuils TSB de Coggan
             {label: 'Transition', from: 25, to: Infinity, color: dark ? '#38bdf8' : '#0284c7'},
             {label: 'Frais', from: 5, to: 25, color: dark ? '#4ade80' : '#16a34a'},
