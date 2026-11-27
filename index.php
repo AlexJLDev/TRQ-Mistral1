@@ -1965,16 +1965,77 @@ if ($p === 'activity') {
       $icoHr = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/></svg>';
       $icoEnr = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>';
       ?>
-      <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 md:gap-4">
-        <?php
-        stat_card('Durée', fmt_dur_full((int)$a['duration']), '', '<span class="inline-flex items-center justify-center size-6 rounded-md bg-sky-500/10 text-sky-600 dark:text-sky-400 shrink-0">' . $icoDur . '</span>');
-        stat_card('Distance', n($a['distance'] / 1000, 1) . ' km', $isRun ? pace((float)$a['avg_speed']) . ' /km' : n($a['avg_speed'] * 3.6, 1) . ' km/h', '<span class="inline-flex items-center justify-center size-6 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">' . $icoDist . '</span>');
-        stat_card('Charge & IF', n($a['tss']) . ' TSS', 'IF : ' . n($a['if_'], 2), '<span class="inline-flex items-center justify-center size-6 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">' . $icoLoad . '</span>');
-        stat_card($isRun ? 'Puissance moy.' : 'Normalized Power', n($a['np'] ?: $a['avg_w']) . ' W', 'Moyenne : ' . n($a['avg_w']) . ' W · VI ' . n($a['vi'], 2), '<span class="inline-flex items-center justify-center size-6 rounded-md bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 shrink-0">' . $icoPwr . '</span>');
-        stat_card('FC Moy. / Max', ($a['avg_hr'] ? round($a['avg_hr']) . ' bpm' : '–'), $a['max_hr'] ? 'Max : ' . round($a['max_hr']) . ' bpm' : '', '<span class="inline-flex items-center justify-center size-6 rounded-md bg-rose-500/10 text-rose-600 dark:text-rose-400 shrink-0">' . $icoHr . '</span>');
-        stat_card('Énergie & D+', n($a['elev']) . ' m D+', n($a['kj']) . ' kJ (' . n($a['kj'] ? $a['kj'] * 1.05 : 0) . ' kcal)', '<span class="inline-flex items-center justify-center size-6 rounded-md bg-orange-500/10 text-orange-600 dark:text-orange-400 shrink-0">' . $icoEnr . '</span>');
-        ?>
-      </div>
+      <?php
+      /* Mesures min/moy/max calculées depuis les flux bruts (affichage épuré type "résumé") */
+      $hrS = clean($S['hr'] ?? []);
+      $pwrS = clean($S['watts'] ?? []);
+      $spdS = clean($S['speed'] ?? []);
+      $cadS = clean($S['cadence'] ?? []);
+      $hrMin = $hrS ? min($hrS) : null;
+      $pwrMax = $pwrS ? max($pwrS) : null;
+      $spdMax = $spdS ? max($spdS) * 3.6 : null;
+      $cadMax = $cadS ? max($cadS) : null;
+      $plannedDur = !empty($planCmp) && (int)$planCmp['dur']['planned'] > 0 ? fmt_dur((int)$planCmp['dur']['planned']) : null;
+      $plannedTss = !empty($planCmp) && (int)$planCmp['tss']['planned'] > 0 ? (string)round($planCmp['tss']['planned']) : null;
+      /* Lignes "Mesures" : label, min, moy, max (null = caché) */
+      $mesures = [];
+      if ($hrS || $a['avg_hr']) $mesures[] = ['Fréquence cardiaque', $icoHr, $hrMin !== null ? round($hrMin) . ' bpm' : null, $a['avg_hr'] ? round($a['avg_hr']) . ' bpm' : null, $a['max_hr'] ? round($a['max_hr']) . ' bpm' : null];
+      if ($pwrS || $a['avg_w']) $mesures[] = ['Puissance', $icoPwr, null, $a['avg_w'] ? n($a['avg_w']) . ' W' : null, $pwrMax !== null ? n($pwrMax) . ' W' : null];
+      if ($spdS || $a['avg_speed']) $mesures[] = ['Vitesse', $icoDist, null, $a['avg_speed'] ? n($a['avg_speed'] * 3.6, 1) . ' km/h' : null, $spdMax !== null ? n($spdMax, 1) . ' km/h' : null];
+      if ($a['cadence'] || $cadMax) $mesures[] = ['Cadence', $icoEnr, null, $a['cadence'] ? round($a['cadence']) . ' rpm' : null, $cadMax ? round($cadMax) . ' rpm' : null];
+      /* Lignes "Détails de la séance" : label -> valeur */
+      $details = [
+        ['Durée', fmt_dur_full((int)$a['duration']), $plannedDur !== null ? 'planifié ' . $plannedDur : ''],
+        ['Distance', n($a['distance'] / 1000, 2) . ' km', ''],
+        [$isRun ? 'Allure moyenne' : 'Vitesse moyenne', $isRun ? (pace((float)$a['avg_speed']) . ' /km') : (n($a['avg_speed'] * 3.6, 2) . ' km/h'), ''],
+        ['Charge (TSS)', n($a['tss']), $plannedTss !== null ? 'planifié ' . $plannedTss : ''],
+        ['Intensité (IF)', n($a['if_'], 2), ''],
+        [$isRun ? 'Puissance moyenne' : 'Puissance normalisée', n($a['np'] ?: $a['avg_w']) . ' W', 'moyenne ' . n($a['avg_w']) . ' W'],
+        ['Variabilité (VI)', n($a['vi'], 2), ''],
+        ['Efficience (EF)', n($a['ef'], 2), ''],
+        ['Énergie', n($a['kj']) . ' kJ', n($a['kj'] ? $a['kj'] * 1.05 : 0) . ' kcal'],
+        ['Dénivelé +', n($a['elev']) . ' m', ''],
+        ['Cadence moyenne', $a['cadence'] ? round($a['cadence']) . ' rpm' : '–', ''],
+      ];
+      ?>
+      <section aria-label="Résumé de la séance" class="space-y-4">
+        <div class="grid grid-cols-3 gap-4 sm:gap-6">
+          <div>
+            <p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Durée</p>
+            <p class="mt-1 text-3xl md:text-4xl font-bold tabular-nums leading-none"><?= fmt_dur_full((int)$a['duration']) ?></p>
+            <p class="mt-2 text-xs text-muted-foreground tabular-nums"><?= $plannedDur !== null ? 'Planifié : ' . h($plannedDur) : '&nbsp;' ?></p>
+          </div>
+          <div class="sm:border-l sm:border-border sm:pl-6">
+            <p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Distance</p>
+            <p class="mt-1 text-3xl md:text-4xl font-bold tabular-nums leading-none"><?= n($a['distance'] / 1000, 2) ?> <span class="text-base font-medium text-muted-foreground">km</span></p>
+            <p class="mt-2 text-xs text-muted-foreground tabular-nums"><?= $isRun ? h(pace((float)$a['avg_speed'])) . ' /km' : n($a['avg_speed'] * 3.6, 1) . ' km/h' ?></p>
+          </div>
+          <div class="sm:border-l sm:border-border sm:pl-6">
+            <p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Charge</p>
+            <p class="mt-1 text-3xl md:text-4xl font-bold tabular-nums leading-none"><?= n($a['tss']) ?> <span class="text-base font-medium text-muted-foreground">TSS</span></p>
+            <p class="mt-2 text-xs text-muted-foreground tabular-nums">IF <?= n($a['if_'], 2) ?><?= $plannedTss !== null ? ' · planifié ' . h($plannedTss) : '' ?></p>
+          </div>
+        </div>
+        <div class="grid gap-3 sm:grid-cols-3">
+          <div class="rounded-xl border bg-card p-4">
+            <p class="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"><span class="inline-flex items-center justify-center size-6 rounded-md bg-rose-500/10 text-rose-600 dark:text-rose-400"><?= $icoHr ?></span>FC moyenne</p>
+            <p class="mt-2 text-2xl font-bold tabular-nums leading-none"><?= $a['avg_hr'] ? round($a['avg_hr']) : '–' ?> <span class="text-sm font-medium text-muted-foreground">bpm</span></p>
+            <p class="mt-1.5 text-xs text-muted-foreground tabular-nums"><?= $a['max_hr'] ? 'Max ' . round($a['max_hr']) . ' bpm' : '&nbsp;' ?></p>
+          </div>
+          <div class="rounded-xl border bg-card p-4">
+            <p class="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"><span class="inline-flex items-center justify-center size-6 rounded-md bg-cyan-500/10 text-cyan-600 dark:text-cyan-400"><?= $icoPwr ?></span><?= $isRun ? 'Puissance' : 'Puissance normalisée' ?></p>
+            <p class="mt-2 text-2xl font-bold tabular-nums leading-none"><?= n($a['np'] ?: $a['avg_w']) ?> <span class="text-sm font-medium text-muted-foreground">W</span></p>
+            <p class="mt-1.5 text-xs text-muted-foreground tabular-nums">Moy <?= n($a['avg_w']) ?> W · VI <?= n($a['vi'], 2) ?></p>
+          </div>
+          <div class="rounded-xl border bg-card p-4">
+            <p class="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"><span class="inline-flex items-center justify-center size-6 rounded-md bg-orange-500/10 text-orange-600 dark:text-orange-400"><?= $icoEnr ?></span>Énergie &amp; D+</p>
+            <p class="mt-2 text-2xl font-bold tabular-nums leading-none"><?= n($a['kj']) ?> <span class="text-sm font-medium text-muted-foreground">kJ</span></p>
+            <p class="mt-1.5 text-xs text-muted-foreground tabular-nums"><?= n($a['kj'] ? $a['kj'] * 1.05 : 0) ?> kcal · <?= n($a['elev']) ?> m D+</p>
+          </div>
+        </div>
+      </section>
+
+
 
 
 
@@ -1993,6 +2054,42 @@ if ($p === 'activity') {
       </nav>
 
       <div id="sec-synthese" class="space-y-6 scroll-mt-24">
+
+      <div class="card" id="mesuresCard">
+        <header class="p-4 border-b">
+          <h3 class="text-base font-semibold">Mesures</h3>
+          <p class="text-xs text-muted-foreground">Valeurs extrêmes et moyennes issues des flux de la sortie</p>
+        </header>
+        <section class="divide-y">
+          <?php foreach ($mesures as $m): if ($m[2] === null && $m[3] === null && $m[4] === null) continue; ?>
+          <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 text-sm">
+            <span class="flex items-center gap-2 font-medium"><span class="text-muted-foreground"><?= $m[1] ?></span><?= h($m[0]) ?></span>
+            <span class="tabular-nums text-muted-foreground"><?php
+              $parts = [];
+              if ($m[2] !== null) $parts[] = 'Min <b class="font-semibold text-foreground">' . h($m[2]) . '</b>';
+              if ($m[3] !== null) $parts[] = 'Moy <b class="font-semibold text-foreground">' . h($m[3]) . '</b>';
+              if ($m[4] !== null) $parts[] = 'Max <b class="font-semibold text-foreground">' . h($m[4]) . '</b>';
+              echo implode(' <span class="mx-1 text-border">·</span> ', $parts);
+            ?></span>
+          </div>
+          <?php endforeach; ?>
+        </section>
+      </div>
+
+      <div class="card" id="detailsCard">
+        <header class="p-4 border-b">
+          <h3 class="text-base font-semibold">Détails de la séance</h3>
+          <p class="text-xs text-muted-foreground">Toutes les mesures calculées<?= !empty($planCmp) ? ' · comparaison détaillée avec le plan dans la carte ci-dessous' : '' ?></p>
+        </header>
+        <section class="p-4 grid gap-x-10 sm:grid-cols-2">
+          <?php foreach ($details as $d): ?>
+          <div class="flex items-center justify-between gap-3 border-b py-2 text-sm last:border-0">
+            <span class="text-muted-foreground"><?= h($d[0]) ?></span>
+            <span class="font-semibold tabular-nums"><?= $d[1] ?><?= $d[2] !== '' ? ' <span class="text-xs font-normal text-muted-foreground">· ' . h($d[2]) . '</span>' : '' ?></span>
+          </div>
+          <?php endforeach; ?>
+        </section>
+      </div>
 
       <!-- Nutrition (statement UCI 2026) -->
       <?php $nutPlan = nutrition_session_plan($a, nutrition_weight(), (float)$ftp); $nob = $nutPlan['onbike']; $nutPost = $nutPlan['post']; ?>
