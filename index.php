@@ -1998,42 +1998,40 @@ if ($p === 'activity') {
         ['Cadence moyenne', $a['cadence'] ? round($a['cadence']) . ' rpm' : '–', ''],
       ];
       ?>
-      <section aria-label="Résumé de la séance" class="space-y-4">
-        <div class="grid grid-cols-3 gap-4 sm:gap-6">
+      <div class="card" aria-label="Résumé de la séance">
+        <section class="p-4 grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-4">
           <div>
-            <p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Durée</p>
-            <p class="mt-1 text-3xl md:text-4xl font-bold tabular-nums leading-none"><?= fmt_dur_full((int)$a['duration']) ?></p>
-            <p class="mt-2 text-xs text-muted-foreground tabular-nums"><?= $plannedDur !== null ? 'Planifié : ' . h($plannedDur) : '&nbsp;' ?></p>
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Durée</p>
+            <p class="mt-0.5 text-lg sm:text-xl font-semibold tabular-nums"><?= fmt_dur_full((int)$a['duration']) ?></p>
+            <p class="text-[11px] text-muted-foreground tabular-nums"><?= $plannedDur !== null ? 'Planifié : ' . h($plannedDur) : '&nbsp;' ?></p>
           </div>
           <div class="sm:border-l sm:border-border sm:pl-6">
-            <p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Distance</p>
-            <p class="mt-1 text-3xl md:text-4xl font-bold tabular-nums leading-none"><?= n($a['distance'] / 1000, 2) ?> <span class="text-base font-medium text-muted-foreground">km</span></p>
-            <p class="mt-2 text-xs text-muted-foreground tabular-nums"><?= $isRun ? h(pace((float)$a['avg_speed'])) . ' /km' : n($a['avg_speed'] * 3.6, 1) . ' km/h' ?></p>
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Distance</p>
+            <p class="mt-0.5 text-lg sm:text-xl font-semibold tabular-nums"><?= n($a['distance'] / 1000, 2) ?> <span class="text-xs font-medium text-muted-foreground">km</span></p>
+            <p class="text-[11px] text-muted-foreground tabular-nums"><?= $isRun ? h(pace((float)$a['avg_speed'])) . ' /km' : n($a['avg_speed'] * 3.6, 1) . ' km/h' ?></p>
           </div>
           <div class="sm:border-l sm:border-border sm:pl-6">
-            <p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Charge</p>
-            <p class="mt-1 text-3xl md:text-4xl font-bold tabular-nums leading-none"><?= n($a['tss']) ?> <span class="text-base font-medium text-muted-foreground">TSS</span></p>
-            <p class="mt-2 text-xs text-muted-foreground tabular-nums">IF <?= n($a['if_'], 2) ?><?= $plannedTss !== null ? ' · planifié ' . h($plannedTss) : '' ?></p>
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Charge</p>
+            <p class="mt-0.5 text-lg sm:text-xl font-semibold tabular-nums"><?= n($a['tss']) ?> <span class="text-xs font-medium text-muted-foreground">TSS</span></p>
+            <p class="text-[11px] text-muted-foreground tabular-nums">IF <?= n($a['if_'], 2) ?><?= $plannedTss !== null ? ' · planifié ' . h($plannedTss) : '' ?></p>
           </div>
-        </div>
-        <div class="grid gap-3 sm:grid-cols-3">
-          <div class="rounded-xl border bg-card p-4">
-            <p class="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"><span class="inline-flex items-center justify-center size-6 rounded-md bg-rose-500/10 text-rose-600 dark:text-rose-400"><?= $icoHr ?></span>FC moyenne</p>
-            <p class="mt-2 text-2xl font-bold tabular-nums leading-none"><?= $a['avg_hr'] ? round($a['avg_hr']) : '–' ?> <span class="text-sm font-medium text-muted-foreground">bpm</span></p>
-            <p class="mt-1.5 text-xs text-muted-foreground tabular-nums"><?= $a['max_hr'] ? 'Max ' . round($a['max_hr']) . ' bpm' : '&nbsp;' ?></p>
+          <div class="border-t pt-3">
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><span class="inline-block size-3.5 align-[-2px] mr-1 text-rose-500"><?= $icoHr ?></span>FC moyenne</p>
+            <p class="mt-0.5 text-lg sm:text-xl font-semibold tabular-nums"><?= $a['avg_hr'] ? round($a['avg_hr']) : '–' ?> <span class="text-xs font-medium text-muted-foreground">bpm</span></p>
+            <p class="text-[11px] text-muted-foreground tabular-nums"><?= $a['max_hr'] ? 'Max ' . round($a['max_hr']) . ' bpm' : '&nbsp;' ?></p>
           </div>
-          <div class="rounded-xl border bg-card p-4">
-            <p class="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"><span class="inline-flex items-center justify-center size-6 rounded-md bg-cyan-500/10 text-cyan-600 dark:text-cyan-400"><?= $icoPwr ?></span><?= $isRun ? 'Puissance' : 'Puissance normalisée' ?></p>
-            <p class="mt-2 text-2xl font-bold tabular-nums leading-none"><?= n($a['np'] ?: $a['avg_w']) ?> <span class="text-sm font-medium text-muted-foreground">W</span></p>
-            <p class="mt-1.5 text-xs text-muted-foreground tabular-nums">Moy <?= n($a['avg_w']) ?> W · VI <?= n($a['vi'], 2) ?></p>
+          <div class="border-t pt-3 sm:border-l sm:pl-6">
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><span class="inline-block size-3.5 align-[-2px] mr-1 text-cyan-500"><?= $icoPwr ?></span><?= $isRun ? 'Puissance' : 'Puiss. normalisée' ?></p>
+            <p class="mt-0.5 text-lg sm:text-xl font-semibold tabular-nums"><?= n($a['np'] ?: $a['avg_w']) ?> <span class="text-xs font-medium text-muted-foreground">W</span></p>
+            <p class="text-[11px] text-muted-foreground tabular-nums">Moy <?= n($a['avg_w']) ?> W · VI <?= n($a['vi'], 2) ?></p>
           </div>
-          <div class="rounded-xl border bg-card p-4">
-            <p class="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"><span class="inline-flex items-center justify-center size-6 rounded-md bg-orange-500/10 text-orange-600 dark:text-orange-400"><?= $icoEnr ?></span>Énergie &amp; D+</p>
-            <p class="mt-2 text-2xl font-bold tabular-nums leading-none"><?= n($a['kj']) ?> <span class="text-sm font-medium text-muted-foreground">kJ</span></p>
-            <p class="mt-1.5 text-xs text-muted-foreground tabular-nums"><?= n($a['kj'] ? $a['kj'] * 1.05 : 0) ?> kcal · <?= n($a['elev']) ?> m D+</p>
+          <div class="border-t pt-3 sm:border-l sm:pl-6">
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><span class="inline-block size-3.5 align-[-2px] mr-1 text-orange-500"><?= $icoEnr ?></span>Énergie &amp; D+</p>
+            <p class="mt-0.5 text-lg sm:text-xl font-semibold tabular-nums"><?= n($a['kj']) ?> <span class="text-xs font-medium text-muted-foreground">kJ</span></p>
+            <p class="text-[11px] text-muted-foreground tabular-nums"><?= n($a['kj'] ? $a['kj'] * 1.05 : 0) ?> kcal · <?= n($a['elev']) ?> m D+</p>
           </div>
-        </div>
-      </section>
+        </section>
+      </div>
 
 
 
