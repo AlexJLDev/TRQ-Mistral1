@@ -7,8 +7,53 @@ ob_start('csrf_inject_cb');                  // ajoute le jeton CSRF à tous les
 $p = $_GET['p'] ?? 'dashboard';
 $pdo = db();
 
+/* ---------- Notifications in-app : génération throttlée (30 min) des alertes/objectifs/records/rappels ---------- */
+if ($p !== 'avatar') {
+    try { notif_generate(); } catch (Throwable $e) {}
+    $notifUnread = notif_unread();
+} else {
+    $notifUnread = 0;
+}
+$nNotifs = ($p !== 'avatar') ? notif_latest(40) : [];
+
+/* ---------- Photo de profil servie depuis auth.sqlite ---------- */
+if ($p === 'avatar') {
+    $st = auth_db()->prepare('SELECT avatar, avatar_mime FROM users WHERE id=?');
+    $st->execute([current_uid()]);
+    $row = $st->fetch();
+    $blob = $row && $row['avatar'] !== null ? (is_resource($row['avatar']) ? stream_get_contents($row['avatar']) : (string)$row['avatar']) : null;
+    if ($blob === null || $blob === '') { http_response_code(404); exit; }
+    header('Content-Type: ' . ($row['avatar_mime'] ?: 'application/octet-stream'));
+    header('Content-Length: ' . strlen($blob));
+    header('Cache-Control: private, max-age=86400');
+    echo $blob;
+    exit;
+}
+
 /* ---------- Paramètres POST ---------- */
 if ($p === 'settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    /* Photo de profil : mini-formulaire dédié (upload ou suppression) */
+    if (array_key_exists('avatar_post', $_POST)) {
+        try {
+            if (array_key_exists('avatar_remove', $_POST)) {
+                auth_db()->prepare('UPDATE users SET avatar=NULL, avatar_mime=NULL, avatar_ts=NULL WHERE id=?')->execute([current_uid()]);
+            } else {
+                [$blob, $mime] = avatar_process($_FILES['avatar_file'] ?? []);
+                auth_db()->prepare('UPDATE users SET avatar=?, avatar_mime=?, avatar_ts=? WHERE id=?')->execute([$blob, $mime, time(), current_uid()]);
+            }
+            header('Location: ?p=settings&saved=1');
+        } catch (RuntimeException $e) {
+            header('Location: ?p=settings&err=' . urlencode($e->getMessage()));
+        }
+        exit;
+    }
+    /* Sélecteur de langue : mini-formulaire dédié (ne touche pas aux autres réglages) */
+    if (array_key_exists('lang', $_POST) && !array_key_exists('api_key', $_POST)) {
+        $lang = trim($_POST['lang']);
+        if (array_key_exists($lang, trq_langs())) cfg_set('lang', $lang);
+        header('Location: ?p=settings&saved=1');
+        exit;
+    }
     foreach (['api_key', 'athlete_id', 'ftp', 'lthr', 'max_hr', 'rest_hr', 'base_hrv', 'weight', 'body_fat'] as $k) {
         cfg_set($k, trim($_POST[$k] ?? ''));
     }
@@ -150,30 +195,31 @@ function render_goals_grid(array $gs): void {
 }
 
 function readiness_badge(?float $score): string {
-    if ($score === null) return '<span class="badge" data-variant="outline">Non renseigné</span>';
-    if ($score >= 80) return '<span class="badge bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">Optimal (' . round($score) . ')</span>';
-    if ($score >= 65) return '<span class="badge bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30">Bon (' . round($score) . ')</span>';
-    if ($score >= 50) return '<span class="badge bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">Modéré (' . round($score) . ')</span>';
-    return '<span class="badge" data-variant="destructive">Récup. requise (' . round($score) . ')</span>';
+    if ($score === null) return '<span class="badge" data-variant="outline">' . t('Non renseigné') . '</span>';
+    if ($score >= 80) return '<span class="badge bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">' . t('Optimal (') . round($score) . ')</span>';
+    if ($score >= 65) return '<span class="badge bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30">' . t('Bon (') . round($score) . ')</span>';
+    if ($score >= 50) return '<span class="badge bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">' . t('Modéré (') . round($score) . ')</span>';
+    return '<span class="badge" data-variant="destructive">' . t('Récup. requise (') . round($score) . ')</span>';
 }
 
 function head(string $title, string $active): void {
+    global $notifUnread, $nNotifs;             // badge notifs rendu côté serveur (sinon null dans cette fonction)
     $nav = [
-        'dashboard' => ['Tableau de bord', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>'],
-        'activities' => ['Activités', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>'],
-        'calendar' => ['Calendrier', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>'],
-        'power' => ['Courbes de puissance', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>'],
-        'workouts' => ['Entraînements', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h.01M3 12h.01M3 17h.01"/><path d="M8 7h13M8 12h13M8 17h13"/></svg>'],
-        'admin' => ['Administration', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'],
-        'wellness' => ['Wellness & Santé', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>'],
-        'nutrition' => ['Nutrition', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>'],
-        'progress' => ['Progression', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>'],
-        'zones' => ['Zones', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'],
-        'settings' => ['Paramètres', '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'],
+        'dashboard' => [t('Tableau de bord'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>'],
+        'activities' => [t('Activités'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>'],
+        'calendar' => [t('Calendrier'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>'],
+        'power' => [t('Courbes de puissance'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>'],
+        'workouts' => [t('Entraînements'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h.01M3 12h.01M3 17h.01"/><path d="M8 7h13M8 12h13M8 17h13"/></svg>'],
+        'admin' => [t('Administration'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'],
+        'wellness' => [t('Wellness & Santé'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>'],
+        'nutrition' => [t('Nutrition'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>'],
+        'progress' => [t('Progression'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>'],
+        'zones' => [t('Zones'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'],
+        'settings' => [t('Paramètres'), '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'],
     ];
     ?>
 <!doctype html>
-<html lang="fr" class="antialiased">
+<html lang="<?= trq_lang() ?>" class="antialiased">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -333,6 +379,7 @@ tr.lap-flash { animation: lapflash 1.6s ease-out; }
     background: var(--primary); color: var(--primary-foreground);
     font-size: 11px; font-weight: 600;
   }
+  .dock-ava img { width: 100%; height: 100%; border-radius: 999px; object-fit: cover; display: block; }
   #mobileSheet.trq-open { display: block; position: fixed; inset: 0; z-index: 60; }
   body.trq-sheet-open { overflow: hidden; }
   .trq-sheet-bg { position: absolute; inset: 0; background: rgba(0, 0, 0, .5); }
@@ -400,10 +447,10 @@ tr.lap-flash { animation: lapflash 1.6s ease-out; }
 </script>
 <?php
 $groups = [
-    'Analyse'     => ['dashboard', 'activities', 'calendar'],
-    'Performance' => ['power', 'workouts', 'zones', 'progress'],
-    'Santé'       => ['wellness', 'nutrition'],
-    'Compte'      => array_merge(['settings'], (auth_enabled() && is_admin()) ? ['admin'] : []),
+    t('Analyse')     => ['dashboard', 'activities', 'calendar'],
+    t('Performance') => ['power', 'workouts', 'zones', 'progress'],
+    t('Santé')       => ['wellness', 'nutrition'],
+    t('Compte')      => array_merge(['settings'], (auth_enabled() && is_admin()) ? ['admin'] : []),
 ];
 ?>
 <aside id="sidebar" class="sidebar" data-side="left">
@@ -427,10 +474,11 @@ $groups = [
       <?php endforeach; ?>
     </section>
     <footer>
-      <?php $cu = current_user(); $ini = mb_strtoupper(mb_substr(trim((string)($cu['name'] ?? '?')) ?: '?', 0, 1)); ?>
+      <?php $cu = current_user(); $ini = mb_strtoupper(mb_substr(trim((string)($cu['name'] ?? '?')) ?: '?', 0, 1)); $av = avatar_info(); ?>
       <div class="flex items-center gap-2 px-2 py-1">
         <a href="?p=settings" class="flex min-w-0 flex-1 items-center gap-2 -m-1 rounded-md p-1 transition hover:bg-muted" title="Mes paramètres">
-          <span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"><?= h($ini) ?></span>
+          <?php if ($av): ?><img class="size-8 shrink-0 rounded-full object-cover" alt="" src="?p=avatar&v=<?= (int)$av['ts'] ?>"><?php else: ?>
+          <span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"><?= h($ini) ?></span><?php endif; ?>
           <div class="min-w-0 flex-1 leading-tight">
             <p class="truncate text-sm font-medium"><?= h($cu['name'] ?? '') ?></p>
             <p class="truncate text-[11px] text-muted-foreground">FTP <?= h(cfg('ftp', '–')) ?> W<?= cfg('weight') ? ' · ' . h(cfg('weight')) . ' kg' : '' ?></p>
@@ -462,6 +510,19 @@ $groups = [
       <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
       <span class="hidden sm:inline">Synchroniser</span>
     </button>
+    <div class="relative" id="notifWrap">
+      <button class="btn relative" data-variant="ghost" data-size="icon-sm" id="notifBtn" aria-label="Notifications">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+        <span id="notifBadge" class="<?= $notifUnread > 0 ? '' : 'hidden' ?> absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white"><?= $notifUnread > 0 ? $notifUnread : '' ?></span>
+      </button>
+      <div id="notifPanel" class="hidden absolute right-0 top-full z-40 mt-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border bg-popover shadow-lg">
+        <div class="flex items-center justify-between border-b px-3 py-2">
+          <span class="text-sm font-semibold"><?= h(t('Notifications')) ?></span>
+          <button type="button" id="notifReadAll" class="text-xs text-muted-foreground hover:underline"><?= h(t('Tout marquer lu')) ?></button>
+        </div>
+        <div id="notifList" class="max-h-80 overflow-y-auto"></div>
+      </div>
+    </div>
     <button class="btn" data-variant="ghost" data-size="icon-sm" id="themeBtn" aria-label="Basculer thème">
       <svg class="w-4 h-4 dark:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
       <svg class="w-4 h-4 hidden dark:block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2m-7.07-14.07 1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32 1.41-1.41"/></svg>
@@ -488,7 +549,7 @@ function foot(): void { ?>
 <?php if (!empty($GLOBALS['trq_nav'])): [$trqNav, $trqGroups, $trqActive] = $GLOBALS['trq_nav']; [$trqCu, $trqIni] = $GLOBALS['trq_user'] ?? ['', '?']; ?>
 <nav id="mobileDock" aria-label="Navigation mobile">
   <a href="?p=settings" class="dock-btn" title="Mes paramètres">
-    <span class="dock-ava"><?= h($trqIni) ?></span>
+    <span class="dock-ava"><?php if (!empty($GLOBALS['trq_user'][0]) && avatar_info()): ?><img alt="" src="?p=avatar&v=<?= (int)avatar_info()['ts'] ?>"><?php else: ?><?= h($trqIni) ?><?php endif; ?></span>
   </a>
   <?php foreach (['dashboard', 'activities', 'calendar', 'progress'] as $trqK): [$trqL, $trqIco] = $trqNav[$trqK]; ?>
   <a href="?p=<?= $trqK ?>" class="dock-btn<?= $trqActive === $trqK ? ' is-active' : '' ?>" aria-label="<?= h($trqL) ?>"<?= $trqActive === $trqK ? ' aria-current="page"' : '' ?>><?= $trqIco ?></a>
@@ -716,6 +777,104 @@ document.getElementById('themeBtn').onclick = () => {
     location.reload();
 };
 
+/* ---------- Notifications in-app : cloche, panneau, badge, toasts ---------- */
+const NOTIF0 = <?= json_encode($nNotifs, JSON_UNESCAPED_UNICODE) ?>;
+const NOTIF_NS = {
+    items: (NOTIF0) ? NOTIF0 : [],
+    maxSeen: 0,
+    lvlCol: {good: 'bg-emerald-500', info: 'bg-sky-500', warn: 'bg-amber-500', crit: 'bg-red-500'},
+    fmtAgo(ts) {
+        const en = document.documentElement.lang === 'en';
+        let d = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+        if (d < 60) return en ? 'just now' : 'à l’instant';
+        if (d < 3600) { const m = Math.floor(d / 60); return en ? m + ' min ago' : 'il y a ' + m + ' min'; }
+        if (d < 86400) { const h = Math.floor(d / 3600); return en ? h + 'h ago' : 'il y a ' + h + ' h'; }
+        const j = Math.floor(d / 86400); return en ? j + (j > 1 ? ' days ago' : ' day ago') : 'il y a ' + j + ' j';
+    },
+    render(list) {
+        this.items = list;
+        const box = document.getElementById('notifList');
+        if (!box) return;
+        if (!list.length) { box.innerHTML = '<p class="px-3 py-6 text-center text-xs text-muted-foreground">' + (document.documentElement.lang === 'en' ? 'No notifications' : 'Aucune notification') + '</p>'; }
+        else {
+            box.innerHTML = '';
+            for (const n of list) {
+                const col = this.lvlCol[n.level] || this.lvlCol.info;
+                const el = document.createElement('button');
+                el.type = 'button';
+                el.className = 'block w-full border-b px-3 py-2.5 text-left last:border-b-0 hover:bg-muted/60 ' + (n.read_at ? 'opacity-55' : '');
+                el.dataset.nid = n.id;
+                el.innerHTML = '<span class="flex items-start gap-2">'
+                    + '<span class="mt-1 inline-block size-2 shrink-0 rounded-full ' + col + '"></span>'
+                    + '<span class="min-w-0 flex-1">'
+                    + '<span class="flex items-baseline justify-between gap-2"><span class="truncate text-xs font-semibold">' + this.esc(n.title) + '</span>'
+                    + '<span class="shrink-0 text-[10px] text-muted-foreground">' + this.fmtAgo(+n.ts) + '</span></span>'
+                    + (n.body ? '<span class="mt-0.5 block text-[11px] leading-snug text-muted-foreground">' + this.esc(n.body) + '</span>' : '')
+                    + '</span></span>';
+                el.onclick = () => this.open(n);
+                box.appendChild(el);
+            }
+        }
+    },
+    esc(s) { const d = document.createElement('span'); d.textContent = (s ?? '') + ''; return d.innerHTML; },
+    badge(count) {
+        const b = document.getElementById('notifBadge');
+        if (!b) return;
+        if (count > 0) { b.classList.remove('hidden'); b.textContent = count; }
+        else b.classList.add('hidden');
+    },
+    async refresh(announce) {
+        try {
+            const j = await call('notif_list');
+            this.badge(j.unread);
+            const fresh = (j.items || []).filter(n => !n.read_at && n.id > this.maxSeen);
+            this.render(j.items || []);
+            const top = (j.items || [])[0];
+            if (top) this.maxSeen = Math.max(this.maxSeen, top.id);
+            if (announce) for (const n of fresh.slice(0, 3)) this.toast(n);
+        } catch (e) {}
+    },
+    async open(n) {
+        try { if (!n.read_at) { await call('notif_read', {id: n.id}); this.badge(this.badgeCount() - 1); } } catch (e) {}
+        document.getElementById('notifPanel').classList.add('hidden');
+        if (n.link) location.href = n.link;
+        else this.refresh(false);
+    },
+    badgeCount() { const b = document.getElementById('notifBadge'); if (!b || b.classList.contains('hidden')) return 0; return +b.textContent || 0; },
+    toast(n) {
+        let host = document.getElementById('trqToasts');
+        if (!host) {
+            host = document.createElement('div');
+            host.id = 'trqToasts';
+            host.className = 'fixed bottom-4 right-4 z-50 flex w-72 flex-col gap-2';
+            document.body.appendChild(host);
+        }
+        const col = this.lvlCol[n.level] || this.lvlCol.info;
+        const t = document.createElement('div');
+        t.className = 'rounded-lg border bg-popover px-3 py-2 shadow-lg';
+        t.innerHTML = '<span class="flex items-start gap-2"><span class="mt-1 inline-block size-2 shrink-0 rounded-full ' + col + '"></span>'
+            + '<span class="min-w-0 flex-1"><span class="block text-xs font-semibold">' + this.esc(n.title) + '</span>'
+            + (n.body ? '<span class="mt-0.5 block text-[11px] leading-snug text-muted-foreground">' + this.esc(n.body) + '</span>' : '')
+            + '</span></span>';
+        t.onclick = () => { t.remove(); if (n.link) location.href = n.link; };
+        host.appendChild(t);
+        setTimeout(() => t.remove(), 6000);
+    }
+};
+const notifBtn = document.getElementById('notifBtn');
+const notifPanel = document.getElementById('notifPanel');
+if (notifBtn && notifPanel) {
+    notifBtn.onclick = (e) => { e.stopPropagation(); notifPanel.classList.toggle('hidden'); if (!notifPanel.classList.contains('hidden')) NOTIF_NS.refresh(false); };
+    document.addEventListener('click', (e) => { if (!notifPanel.classList.contains('hidden') && !notifPanel.contains(e.target) && e.target !== notifBtn) notifPanel.classList.add('hidden'); });
+}
+const notifReadAll = document.getElementById('notifReadAll');
+if (notifReadAll) notifReadAll.onclick = async (e) => { e.stopPropagation(); try { const j = await call('notif_read_all'); NOTIF_NS.badge(j.unread); NOTIF_NS.refresh(false); } catch (err) {} };
+NOTIF_NS.badge(<?= (int)$notifUnread ?>);
+NOTIF_NS.render(NOTIF0 || []);
+{ const top = (NOTIF0 || [])[0]; if (top) NOTIF_NS.maxSeen = top.id; }
+NOTIF_NS.refresh(false);                                   // recalcul immédiat du badge à l'ouverture
+setInterval(() => NOTIF_NS.refresh(true), 60000);
+
 async function pushPlanned(id) {
   try { await call('plan_push', {id}); location.reload(); } catch (e) { alert(e.message); }
 }
@@ -725,7 +884,13 @@ async function deletePlanned(id) {
 }
 async function call(action, extra = {}) {
   const r = await fetch('sync.php', {method: 'POST', body: new URLSearchParams({action, ...extra})});
-  let j; try { j = await r.json(); } catch (e) { throw new Error('Réponse invalide du serveur (HTTP ' + r.status + ').'); }
+  let txt = '';
+  try { txt = await r.text(); } catch (e) {}
+  let j;
+  try { j = JSON.parse(txt); } catch (e) {
+    const frag = txt.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+    throw new Error('Réponse invalide du serveur (HTTP ' + r.status + ')' + (frag ? ' : ' + frag : ' — réponse vide'));
+  }
   if (j.login) { location.href = 'login.php'; throw new Error(j.error); }
   if (!j.ok) throw new Error(j.error);
   return j;
@@ -748,12 +913,18 @@ async function runSync(days = 365, recompute = false) {
             try { await call('sync_wellness', {days: 90}); } catch(e){}
         }
         total = j.remaining || 1;
+        let stall = 0, last = total;
         while (j.remaining > 0) {
             msg.textContent = `Traitement des flux & analyse : ${total - j.remaining} / ${total}`;
             count.textContent = Math.round(((total - j.remaining) / total) * 100) + '%';
+            await new Promise(r => setTimeout(r, 350));
             j = await call('process');
+            stall = j.remaining < last ? 0 : stall + 1;
+            last = j.remaining;
+            if (stall >= 5) throw new Error('des séances résistent au traitement (rate-limit intervals.icu ou données manquantes) — réessaie plus tard ou resynchronise la séance concernée depuis son détail');
         }
-        msg.textContent = 'Synchronisation terminée avec succès !';
+        const tail = !recompute && j.created ? ` — ${j.created} nouvelle${j.created > 1 ? 's' : ''} séance${j.created > 1 ? 's' : ''}` : '';
+        msg.textContent = 'Synchronisation terminée avec succès !' + tail;
         setTimeout(() => location.reload(), 600);
     } catch (e) {
         msg.textContent = 'Erreur : ' + e.message;
@@ -799,7 +970,7 @@ $count = (int)$pdo->query('SELECT COUNT(*) FROM activities')->fetchColumn();
    TABLEAU DE BORD (DASHBOARD)
    ======================================================== */
 if ($p === 'dashboard') {
-    head('Tableau de bord', 'dashboard');
+    head(t('Tableau de bord'), 'dashboard');
     if (!$count) { empty_state(); foot(); exit; }
 
     $sport = in_array($_GET['sport'] ?? '', ['ride', 'run'], true) ? $_GET['sport'] : null;
@@ -856,12 +1027,54 @@ if ($p === 'dashboard') {
       </div>
     </div>
 
-    <!-- KPIs -->
-    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+    <!-- KPIs : 3 cartes métriques avec sparkline (Forme bleu app · Fatigue rouge rosé · Fraîcheur orange) -->
+    <div class="grid grid-cols-3 gap-2 sm:gap-4">
       <?php
-      stat_card('Forme (CTL)', n($cur['ctl'], 1), 'Rampe 7j : ' . sprintf('%+.1f', $cur['ctl'] - $prev['ctl']));
-      stat_card('Fatigue (ATL)', n($cur['atl'], 1), 'Moyenne 7 jours');
-      stat_card('Fraîcheur (TSB)', n($tsb, 1), '<span ' . $state[1] . '>' . $state[0] . '</span>');
+      $icoCtl = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>';
+      $icoAtl = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>';
+      $icoTsb = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2V9.6a4.6 4.6 0 0 1 7-3.9l1.4.9a2.5 2.5 0 0 0 2-.4z"/><path d="M2 12h13.5a2.5 2.5 0 0 1 0 5H12"/></svg>';
+      $chip = fn($svg, string $bg, string $fg) => '<span class="hidden sm:inline-flex items-center justify-center size-6 rounded-md shrink-0 ' . $bg . ' ' . $fg . '">' . $svg . '</span>';
+      $dCtl = $cur['ctl'] - $prev['ctl']; $dAtl = $cur['atl'] - $prev['atl']; $dTsb = $tsb - $prev['tsb'];
+      $tr = fn($d) => '<span class="inline-flex items-center gap-0.5 sm:gap-1 text-[9px] sm:text-[11px] font-semibold ' . ($d >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500 dark:text-rose-400') . '">' . ($d >= 0 ? '▲ +' : '▼ −') . n(abs($d), 1) . '<span class="font-normal text-muted-foreground">7j</span></span>';
+      $spark = fn(string $id) => '<div class="mt-1 h-6 sm:mt-2 sm:h-10 -mx-1"><canvas id="' . $id . '" aria-hidden="true"></canvas></div>';
+      ?>
+      <div class="card p-2.5 sm:p-4">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <p class="text-[9px] sm:text-[11px] font-semibold uppercase tracking-wider text-muted-foreground whitespace-nowrap overflow-hidden text-ellipsis">Forme <span class="hidden sm:inline">(CTL)</span></p>
+            <p class="mt-0.5 sm:mt-1 text-base sm:text-2xl font-bold tabular-nums text-[#0f3ab2] dark:text-[#6b8cf0]"><?= n($cur['ctl'], 1) ?></p>
+            <p class="mt-0.5"><?= $tr($dCtl) ?></p>
+          </div>
+          <?= $chip($icoCtl, 'bg-[#0f3ab2]/10', 'text-[#0f3ab2] dark:text-[#6b8cf0]') ?>
+        </div>
+        <?= $spark('sparkCtl') ?>
+      </div>
+      <div class="card p-2.5 sm:p-4">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <p class="text-[9px] sm:text-[11px] font-semibold uppercase tracking-wider text-muted-foreground whitespace-nowrap overflow-hidden text-ellipsis">Fatigue <span class="hidden sm:inline">(ATL)</span></p>
+            <p class="mt-0.5 sm:mt-1 text-base sm:text-2xl font-bold tabular-nums text-rose-600 dark:text-rose-400"><?= n($cur['atl'], 1) ?></p>
+            <p class="mt-0.5"><?= $tr($dAtl) ?></p>
+          </div>
+          <?= $chip($icoAtl, 'bg-rose-500/10', 'text-rose-600 dark:text-rose-400') ?>
+        </div>
+        <?= $spark('sparkAtl') ?>
+      </div>
+      <div class="card p-2.5 sm:p-4">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <p class="text-[9px] sm:text-[11px] font-semibold uppercase tracking-wider text-muted-foreground whitespace-nowrap overflow-hidden text-ellipsis">Fraîcheur <span class="hidden sm:inline">(TSB)</span></p>
+            <p class="mt-0.5 sm:mt-1 text-base sm:text-2xl font-bold tabular-nums text-amber-600 dark:text-amber-400"><?= n($tsb, 1) ?></p>
+            <p class="mt-0.5"><?= '<span ' . $state[1] . '>' . $state[0] . '</span>' ?></p>
+          </div>
+          <?= $chip($icoTsb, 'bg-amber-500/10', 'text-amber-600 dark:text-amber-400') ?>
+        </div>
+        <?= $spark('sparkTsb') ?>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+      <?php
       stat_card('7 derniers jours', n($w7['t']) . ' TSS', fmt_dur((int)$w7['d']) . ' · ' . n($w7['km'] / 1000) . ' km');
       stat_card('FTP réglé', n($ftp) . ' W', $weight ? n($ftp / $weight, 2) . ' W/kg' : 'Poids non défini');
       if ($todayWell) {
@@ -892,14 +1105,15 @@ if ($p === 'dashboard') {
     <div class="card" id="pmcCard">
       <header class="p-4 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-2">
         <div>
-          <h3 class="text-base font-semibold">PMC Coggan — TSS</h3>
-          <p class="text-xs text-muted-foreground">Forme (CTL 42 j), fatigue (ATL 7 j), charge quotidienne, et fraîcheur (TSB) par zones de Coggan</p>
+          <h3 class="text-base font-semibold">Évolution de la forme <span class="text-xs font-normal text-muted-foreground">· PMC Coggan</span></h3>
+          <p class="text-xs text-muted-foreground">Forme <span class="text-[#0f3ab2] dark:text-[#6b8cf0] font-medium">CTL</span> (42 j), fatigue <span class="text-rose-600 dark:text-rose-400 font-medium">ATL</span> (7 j), charge quotidienne, et fraîcheur <span class="text-amber-600 dark:text-amber-400 font-medium">TSB</span> par zones de Coggan</p>
         </div>
-        <div class="flex items-center gap-1" id="pmcRange" role="group" aria-label="Période">
+        <div class="flex items-center gap-1 flex-wrap sm:flex-nowrap" id="pmcRange" role="group" aria-label="Période">
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="90">3 mois</button>
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="180">6 mois</button>
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="365">1 an</button>
           <button type="button" class="btn" data-size="sm" data-variant="outline" data-days="0">Tout</button>
+          <button type="button" class="btn" data-size="sm" data-variant="outline" onclick="runSync(4000)" title="<?= h(t('Synchroniser tout l\'historique intervals.icu (long la première fois)')) ?>"><?= h(t('Historique complet')) ?></button>
         </div>
       </header>
       <section class="p-4">
@@ -1067,10 +1281,27 @@ if ($p === 'dashboard') {
         if (!card) return;
         if (!PM_KEYS.length) { card.querySelector('section').innerHTML = '<p class="py-12 text-center text-sm text-muted-foreground">Pas encore de données de charge.</p>'; return; }
         const dark = document.documentElement.classList.contains('dark');
+        /* Couleurs de la référence : forme (CTL) = bleu de l'app · fatigue (ATL) = rouge rosé · fraîcheur (TSB) = orange */
         const C = dark
-            ? {ctl: '#38bdf8', atl: '#fb7340', bar: 'rgba(56,120,170,.40)', grid: 'rgba(148,163,184,.13)', txt: '#7b8aa0'}
-            : {ctl: '#0284c7', atl: '#ea580c', bar: 'rgba(2,132,199,.25)', grid: 'rgba(100,116,139,.20)', txt: '#64748b'};
+            ? {ctl: '#6b8cf0', atl: '#fb7185', tsb: '#f59e0b', bar: 'rgba(61,98,224,.35)', grid: 'rgba(148,163,184,.13)', txt: '#7b8aa0'}
+            : {ctl: '#0f3ab2', atl: '#e11d48', tsb: '#d97706', bar: 'rgba(15,58,178,.22)', grid: 'rgba(100,116,139,.20)', txt: '#64748b'};
         card.style.setProperty('--pmc-ctl', C.ctl); card.style.setProperty('--pmc-atl', C.atl); card.style.setProperty('--pmc-bar', C.bar);
+        /* Sparklines des 3 cartes métriques (30 derniers jours, couleurs de référence) */
+        if (PM_KEYS.length) {
+            const SPARKS = [
+                ['sparkCtl', 'ctl', C.ctl, dark ? 'rgba(61,98,224,.18)' : 'rgba(15,58,178,.12)'],
+                ['sparkAtl', 'atl', C.atl, dark ? 'rgba(251,113,133,.18)' : 'rgba(225,29,72,.12)'],
+                ['sparkTsb', 'tsb', C.tsb, dark ? 'rgba(245,158,11,.18)' : 'rgba(217,119,6,.12)'],
+            ];
+            for (const [id, key, col, fill] of SPARKS) {
+                const cv = document.getElementById(id); if (!cv) continue;
+                const data = PM_KEYS.slice(-30).map(k => PM_ALL[k][key]);
+                new Chart(cv, {type: 'line', data: {labels: data.map((_, i) => i), datasets: [{data, borderColor: col, backgroundColor: fill, fill: true, borderWidth: 2, pointRadius: 0, tension: 0.35}]},
+                    options: {responsive: true, maintainAspectRatio: false, animation: false,
+                        plugins: {legend: {display: false}, tooltip: {enabled: false}},
+                        scales: {x: {display: false}, y: {display: false}}}});
+            }
+        }
         const ZONES = [   // seuils TSB de Coggan
             {label: 'Transition', from: 25, to: Infinity, color: dark ? '#38bdf8' : '#0284c7'},
             {label: 'Frais', from: 5, to: 25, color: dark ? '#4ade80' : '#16a34a'},
@@ -1162,7 +1393,7 @@ if ($p === 'dashboard') {
             bot = new Chart('tsb', {
                 type: 'line',
                 data: {labels: keys, datasets: [{label: 'TSB (fraîcheur)', data: tsb, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 4, cubicInterpolationMode: 'monotone',
-                    borderColor: C.txt, segment: {borderColor: ctx => zoneOf((ctx.p0.parsed.y + ctx.p1.parsed.y) / 2).color},
+                    borderColor: C.tsb, segment: {borderColor: ctx => zoneOf((ctx.p0.parsed.y + ctx.p1.parsed.y) / 2).color},
                     pointHoverBackgroundColor: ctx => zoneOf(tsb[ctx.dataIndex] ?? 0).color}]},
                 options: {...common,
                     onHover: (e, els) => syncTo(top)(e, els),
@@ -1226,7 +1457,7 @@ if ($p === 'dashboard') {
    ACTIVITÉS (ACTIVITIES LIST)
    ======================================================== */
 if ($p === 'activities') {
-    head('Activités', 'activities');
+    head(t('Activités'), 'activities');
     if (!$count) { empty_state(); foot(); exit; }
 
     $sport = in_array($_GET['sport'] ?? '', ['ride', 'run', 'swim', 'other'], true) ? $_GET['sport'] : null;
@@ -1793,16 +2024,75 @@ if ($p === 'activity') {
       $icoHr = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/></svg>';
       $icoEnr = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>';
       ?>
-      <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 md:gap-4">
-        <?php
-        stat_card('Durée', fmt_dur_full((int)$a['duration']), '', '<span class="inline-flex items-center justify-center size-6 rounded-md bg-sky-500/10 text-sky-600 dark:text-sky-400 shrink-0">' . $icoDur . '</span>');
-        stat_card('Distance', n($a['distance'] / 1000, 1) . ' km', $isRun ? pace((float)$a['avg_speed']) . ' /km' : n($a['avg_speed'] * 3.6, 1) . ' km/h', '<span class="inline-flex items-center justify-center size-6 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">' . $icoDist . '</span>');
-        stat_card('Charge & IF', n($a['tss']) . ' TSS', 'IF : ' . n($a['if_'], 2), '<span class="inline-flex items-center justify-center size-6 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">' . $icoLoad . '</span>');
-        stat_card($isRun ? 'Puissance moy.' : 'Normalized Power', n($a['np'] ?: $a['avg_w']) . ' W', 'Moyenne : ' . n($a['avg_w']) . ' W · VI ' . n($a['vi'], 2), '<span class="inline-flex items-center justify-center size-6 rounded-md bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 shrink-0">' . $icoPwr . '</span>');
-        stat_card('FC Moy. / Max', ($a['avg_hr'] ? round($a['avg_hr']) . ' bpm' : '–'), $a['max_hr'] ? 'Max : ' . round($a['max_hr']) . ' bpm' : '', '<span class="inline-flex items-center justify-center size-6 rounded-md bg-rose-500/10 text-rose-600 dark:text-rose-400 shrink-0">' . $icoHr . '</span>');
-        stat_card('Énergie & D+', n($a['elev']) . ' m D+', n($a['kj']) . ' kJ (' . n($a['kj'] ? $a['kj'] * 1.05 : 0) . ' kcal)', '<span class="inline-flex items-center justify-center size-6 rounded-md bg-orange-500/10 text-orange-600 dark:text-orange-400 shrink-0">' . $icoEnr . '</span>');
-        ?>
+      <?php
+      /* Mesures min/moy/max calculées depuis les flux bruts (affichage épuré type "résumé") */
+      $hrS = clean($S['hr'] ?? []);
+      $pwrS = clean($S['watts'] ?? []);
+      $spdS = clean($S['speed'] ?? []);
+      $cadS = clean($S['cadence'] ?? []);
+      $hrMin = $hrS ? min($hrS) : null;
+      $pwrMax = $pwrS ? max($pwrS) : null;
+      $spdMax = $spdS ? max($spdS) * 3.6 : null;
+      $cadMax = $cadS ? max($cadS) : null;
+      $plannedDur = !empty($planCmp) && (int)$planCmp['dur']['planned'] > 0 ? fmt_dur((int)$planCmp['dur']['planned']) : null;
+      $plannedTss = !empty($planCmp) && (int)$planCmp['tss']['planned'] > 0 ? (string)round($planCmp['tss']['planned']) : null;
+      /* Lignes "Mesures" : label, min, moy, max (null = caché) */
+      $mesures = [];
+      if ($hrS || $a['avg_hr']) $mesures[] = ['Fréquence cardiaque', $icoHr, $hrMin !== null ? round($hrMin) . ' bpm' : null, $a['avg_hr'] ? round($a['avg_hr']) . ' bpm' : null, $a['max_hr'] ? round($a['max_hr']) . ' bpm' : null];
+      if ($pwrS || $a['avg_w']) $mesures[] = ['Puissance', $icoPwr, null, $a['avg_w'] ? n($a['avg_w']) . ' W' : null, $pwrMax !== null ? n($pwrMax) . ' W' : null];
+      if ($spdS || $a['avg_speed']) $mesures[] = ['Vitesse', $icoDist, null, $a['avg_speed'] ? n($a['avg_speed'] * 3.6, 1) . ' km/h' : null, $spdMax !== null ? n($spdMax, 1) . ' km/h' : null];
+      if ($a['cadence'] || $cadMax) $mesures[] = ['Cadence', $icoEnr, null, $a['cadence'] ? round($a['cadence']) . ' rpm' : null, $cadMax ? round($cadMax) . ' rpm' : null];
+      /* Lignes "Détails de la séance" : label -> valeur */
+      $details = [
+        ['Durée', fmt_dur_full((int)$a['duration']), $plannedDur !== null ? 'planifié ' . $plannedDur : ''],
+        ['Distance', n($a['distance'] / 1000, 2) . ' km', ''],
+        [$isRun ? 'Allure moyenne' : 'Vitesse moyenne', $isRun ? (pace((float)$a['avg_speed']) . ' /km') : (n($a['avg_speed'] * 3.6, 2) . ' km/h'), ''],
+        ['Charge (TSS)', n($a['tss']), $plannedTss !== null ? 'planifié ' . $plannedTss : ''],
+        ['Intensité (IF)', n($a['if_'], 2), ''],
+        [$isRun ? 'Puissance moyenne' : 'Puissance normalisée', n($a['np'] ?: $a['avg_w']) . ' W', 'moyenne ' . n($a['avg_w']) . ' W'],
+        ['Variabilité (VI)', n($a['vi'], 2), ''],
+        ['Efficience (EF)', n($a['ef'], 2), ''],
+        ['Énergie', n($a['kj']) . ' kJ', n($a['kj'] ? $a['kj'] * 1.05 : 0) . ' kcal'],
+        ['Dénivelé +', n($a['elev']) . ' m', ''],
+        ['Cadence moyenne', $a['cadence'] ? round($a['cadence']) . ' rpm' : '–', ''],
+      ];
+      ?>
+      <div class="card" aria-label="Résumé de la séance">
+        <section class="p-4 grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-4">
+          <div>
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Durée</p>
+            <p class="mt-0.5 text-lg sm:text-xl font-semibold tabular-nums"><?= fmt_dur_full((int)$a['duration']) ?></p>
+            <p class="text-[11px] text-muted-foreground tabular-nums"><?= $plannedDur !== null ? 'Planifié : ' . h($plannedDur) : '&nbsp;' ?></p>
+          </div>
+          <div class="sm:border-l sm:border-border sm:pl-6">
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Distance</p>
+            <p class="mt-0.5 text-lg sm:text-xl font-semibold tabular-nums"><?= n($a['distance'] / 1000, 2) ?> <span class="text-xs font-medium text-muted-foreground">km</span></p>
+            <p class="text-[11px] text-muted-foreground tabular-nums"><?= $isRun ? h(pace((float)$a['avg_speed'])) . ' /km' : n($a['avg_speed'] * 3.6, 1) . ' km/h' ?></p>
+          </div>
+          <div class="sm:border-l sm:border-border sm:pl-6">
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Charge</p>
+            <p class="mt-0.5 text-lg sm:text-xl font-semibold tabular-nums"><?= n($a['tss']) ?> <span class="text-xs font-medium text-muted-foreground">TSS</span></p>
+            <p class="text-[11px] text-muted-foreground tabular-nums">IF <?= n($a['if_'], 2) ?><?= $plannedTss !== null ? ' · planifié ' . h($plannedTss) : '' ?></p>
+          </div>
+          <div class="border-t pt-3">
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><span class="inline-block size-3.5 align-[-2px] mr-1 text-rose-500"><?= $icoHr ?></span>FC moyenne</p>
+            <p class="mt-0.5 text-lg sm:text-xl font-semibold tabular-nums"><?= $a['avg_hr'] ? round($a['avg_hr']) : '–' ?> <span class="text-xs font-medium text-muted-foreground">bpm</span></p>
+            <p class="text-[11px] text-muted-foreground tabular-nums"><?= $a['max_hr'] ? 'Max ' . round($a['max_hr']) . ' bpm' : '&nbsp;' ?></p>
+          </div>
+          <div class="border-t pt-3 sm:border-l sm:pl-6">
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><span class="inline-block size-3.5 align-[-2px] mr-1 text-cyan-500"><?= $icoPwr ?></span><?= $isRun ? 'Puissance' : 'Puiss. normalisée' ?></p>
+            <p class="mt-0.5 text-lg sm:text-xl font-semibold tabular-nums"><?= n($a['np'] ?: $a['avg_w']) ?> <span class="text-xs font-medium text-muted-foreground">W</span></p>
+            <p class="text-[11px] text-muted-foreground tabular-nums">Moy <?= n($a['avg_w']) ?> W · VI <?= n($a['vi'], 2) ?></p>
+          </div>
+          <div class="border-t pt-3 sm:border-l sm:pl-6">
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><span class="inline-block size-3.5 align-[-2px] mr-1 text-orange-500"><?= $icoEnr ?></span>Énergie &amp; D+</p>
+            <p class="mt-0.5 text-lg sm:text-xl font-semibold tabular-nums"><?= n($a['kj']) ?> <span class="text-xs font-medium text-muted-foreground">kJ</span></p>
+            <p class="text-[11px] text-muted-foreground tabular-nums"><?= n($a['kj'] ? $a['kj'] * 1.05 : 0) ?> kcal · <?= n($a['elev']) ?> m D+</p>
+          </div>
+        </section>
       </div>
+
+
 
 
 
@@ -1821,6 +2111,41 @@ if ($p === 'activity') {
       </nav>
 
       <div id="sec-synthese" class="space-y-6 scroll-mt-24">
+
+      <div class="card" id="mesuresCard">
+        <header class="p-4 border-b">
+          <h3 class="text-base font-semibold">Mesures</h3>
+          <p class="text-xs text-muted-foreground">Valeurs extrêmes et moyennes issues des flux de la sortie</p>
+        </header>
+        <section class="divide-y">
+          <?php foreach ($mesures as $m): if ($m[2] === null && $m[3] === null && $m[4] === null) continue; $parts = [];
+              if ($m[2] !== null) $parts[] = 'Min <b class="font-semibold text-foreground">' . h($m[2]) . '</b>';
+              if ($m[3] !== null) $parts[] = 'Moy <b class="font-semibold text-foreground">' . h($m[3]) . '</b>';
+              if ($m[4] !== null) $parts[] = 'Max <b class="font-semibold text-foreground">' . h($m[4]) . '</b>'; ?>
+          <div class="grid gap-1 px-4 py-3 text-sm sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+            <span class="flex items-center gap-2 font-medium"><span class="text-muted-foreground"><?= $m[1] ?></span><?= h($m[0]) ?></span>
+            <span class="tabular-nums text-muted-foreground whitespace-nowrap sm:text-right"><?php
+              echo implode(' <span class="mx-1 text-border">·</span> ', $parts);
+            ?></span>
+          </div>
+          <?php endforeach; ?>
+        </section>
+      </div>
+
+      <div class="card" id="detailsCard">
+        <header class="p-4 border-b">
+          <h3 class="text-base font-semibold">Détails de la séance</h3>
+          <p class="text-xs text-muted-foreground">Toutes les mesures calculées<?= !empty($planCmp) ? ' · comparaison détaillée avec le plan dans la carte ci-dessous' : '' ?></p>
+        </header>
+        <section class="p-4 grid gap-x-10 sm:grid-cols-2">
+          <?php foreach ($details as $d): ?>
+          <div class="flex items-center justify-between gap-3 border-b py-2 text-sm last:border-0">
+            <span class="text-muted-foreground"><?= h($d[0]) ?></span>
+            <span class="font-semibold tabular-nums"><?= $d[1] ?><?= $d[2] !== '' ? ' <span class="text-xs font-normal text-muted-foreground">· ' . h($d[2]) . '</span>' : '' ?></span>
+          </div>
+          <?php endforeach; ?>
+        </section>
+      </div>
 
       <!-- Nutrition (statement UCI 2026) -->
       <?php $nutPlan = nutrition_session_plan($a, nutrition_weight(), (float)$ftp); $nob = $nutPlan['onbike']; $nutPost = $nutPlan['post']; ?>
@@ -1865,6 +2190,12 @@ if ($p === 'activity') {
               <span class="inline-block size-2 rounded-full" style="background:<?= $dgColor ?>"></span> Diagnostic automatique
             </div>
             <p class="mt-1.5 text-base font-medium leading-snug"><?= h($diag['main']['text']) ?></p>
+            <?php if (!empty($diag['narrative'])): ?>
+              <p class="mt-2 border-l-2 pl-3 text-sm leading-relaxed text-muted-foreground" style="border-color:<?= $dgColor ?>"><?= h($diag['narrative']) ?></p>
+            <?php endif; ?>
+            <?php if (!empty($diag['simple'])): ?>
+              <p class="mt-2 rounded-lg bg-muted/50 px-3 py-2 text-xs leading-relaxed text-muted-foreground">💡 <?= h($diag['simple']) ?></p>
+            <?php endif; ?>
             <?php if (!empty($diag['extra'])): ?>
               <details class="mt-3 group">
                 <summary class="cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground"><?= count($diag['extra']) ?> autre<?= count($diag['extra']) > 1 ? 's' : '' ?> observation<?= count($diag['extra']) > 1 ? 's' : '' ?></summary>
@@ -1899,13 +2230,19 @@ if ($p === 'activity') {
           <section class="space-y-4 p-4">
             <?php if ($pc['summary']): ?><p class="text-sm font-medium"><?= h($pc['summary']) ?></p><?php endif; ?>
             <?php if ($pc['note']): ?><p class="text-xs text-muted-foreground"><?= h($pc['note']) ?></p><?php endif; ?>
+            <?php $qDur = $pc['dur']['planned'] > 0 ? $pc['dur']['actual'] / $pc['dur']['planned'] : null;
+                  $qTss = $pc['tss']['planned'] > 0 ? $pc['tss']['actual'] / $pc['tss']['planned'] : null;
+                  $dSub = function ($q, float $lo, float $hi): string {
+                      if ($q === null || ($q >= $lo && $q <= $hi)) return '';
+                      return ' (' . ($q > 1 ? '+' : '−') . round(abs($q - 1) * 100) . '% ' . t('du plan') . ')';
+                  }; ?>
             <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <?php foreach ([['Respect des cibles', $pc['parts']['structure'], $pc['parts']['structure'] === null ? 'non évalué' : 'étape par étape'],
-                              ['Durée', $pc['parts']['duration'], fmt_dur((int)$pc['dur']['planned']) . ' → ' . fmt_dur((int)$pc['dur']['actual'])],
-                              ['Charge (TSS)', $pc['parts']['load'], round($pc['tss']['planned']) . ' → ' . round($pc['tss']['actual'])]] as [$lbl, $val, $sub]): ?>
+                              ['Durée', $pc['parts']['duration'], fmt_dur((int)$pc['dur']['planned']) . ' → ' . fmt_dur((int)$pc['dur']['actual']) . $dSub($qDur, 0.95, 1.10)],
+                              ['Charge (TSS)', $pc['parts']['load'], round($pc['tss']['planned']) . ' → ' . round($pc['tss']['actual']) . $dSub($qTss, 0.9, 1.1)]] as [$lbl, $val, $sub]): ?>
                 <div class="rounded-lg border p-3">
                   <p class="text-[10px] uppercase tracking-wide text-muted-foreground"><?= $lbl ?></p>
-                  <p class="text-xl font-semibold tabular-nums"><?= $pctOf($val) ?></p>
+                  <p class="text-xl font-semibold tabular-nums" style="color:<?= $barCol($val) ?>"><?= $pctOf($val) ?></p>
                   <div class="my-1 h-1.5 overflow-hidden rounded-full bg-muted"><div class="h-full rounded-full" style="width:<?= (int)($val ?? 0) ?>%;background:<?= $barCol($val) ?>"></div></div>
                   <p class="text-[11px] text-muted-foreground tabular-nums"><?= h($sub) ?></p>
                 </div>
@@ -1913,7 +2250,9 @@ if ($p === 'activity') {
               <div class="rounded-lg border p-3">
                 <p class="text-[10px] uppercase tracking-wide text-muted-foreground">Départ</p>
                 <p class="text-xl font-semibold tabular-nums"><?= $pc['chart'] ? ($pc['offset'] >= 0 ? '+' : '−') . fmt_dur(abs((int)$pc['offset'])) : '–' ?></p>
-                <p class="mt-1 text-[11px] text-muted-foreground"><?= $pc['mode'] === 'hr' ? 'décalage détecté (latence FC incluse)' : 'décalage détecté avec le plan' ?></p>
+                <p class="mt-1 text-[11px] text-muted-foreground"><?= $pc['offset'] === 0
+                  ? ($pc['mode'] === 'hr' ? 'départ aligné (latence FC incluse)' : 'départ aligné sur le plan')
+                  : ($pc['mode'] === 'hr' ? 'décalage détecté (latence FC incluse)' : 'décalage détecté avec le plan') ?></p>
               </div>
             </div>
             <?php if ($pc['chart']): ?>
@@ -3646,7 +3985,7 @@ const IS_RUN_PAGE = <?= $isRun ? 'true' : 'false' ?>;
    COURBES DE PUISSANCE WKO5 MULTI-SAISONS (PDC)
    ======================================================== */
 if ($p === 'power') {
-    head('Courbes de puissance', 'power');
+    head(t('Courbes de puissance'), 'power');
     $sport = ($_GET['sport'] ?? 'ride') === 'run' ? 'run' : 'ride';
     $isRun = $sport === 'run';
 
@@ -3855,7 +4194,7 @@ if ($p === 'power') {
    WELLNESS & SANTÉ (HRV, FC REPOS, SOMMEIL)
    ======================================================== */
 if ($p === 'wellness') {
-    head('Wellness & Récupération', 'wellness');
+    head(t('Wellness & Récupération'), 'wellness');
     $summary = get_wellness_summary(60);
     $history = $summary['history'] ?? [];
     $todayRow = end($history) ?: null;
@@ -4083,7 +4422,7 @@ if ($p === 'wellness') {
    CALENDRIER D'ENTRAÎNEMENT STYLE TRAININGPEAKS
    ======================================================== */
 if ($p === 'calendar') {
-    head('Calendrier d’entraînement', 'calendar');
+    head(t('Calendrier d’entraînement'), 'calendar');
 
     $today = date('Y-m-d');
     $mParam = $_GET['m'] ?? date('Y-m');
@@ -4102,8 +4441,8 @@ if ($p === 'calendar') {
     $prevW = (clone $weekStart)->modify('-7 days')->format('Y-m-d');
     $nextW = (clone $weekStart)->modify('+7 days')->format('Y-m-d');
 
-    $calMoisFr = [1 => 'janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
-    $calJoursFr = [1 => 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
+    $calMoisFr = [1 => t('janvier'), t('février'), t('mars'), t('avril'), t('mai'), t('juin'), t('juillet'), t('août'), t('septembre'), t('octobre'), t('novembre'), t('décembre')];
+    $calJoursFr = [1 => t('Lundi'), t('Mardi'), t('Mercredi'), t('Jeudi'), t('Vendredi'), t('Samedi'), t('Dimanche')];
 
     $loadRange = function (string $from, string $to) use ($pdo): array {
         $byDay = [];
@@ -4372,7 +4711,7 @@ if ($p === 'calendar') {
    ======================================================== */
 /* ================= ENTRAÎNEMENTS (Workout Builder) ================= */
 if ($p === 'workouts') {
-    head('Entraînements', 'workouts');
+    head(t('Entraînements'), 'workouts');
     $woId = (int)($_GET['id'] ?? 0); $planId = (int)($_GET['plan'] ?? 0);
     $woData = null; $planDate = null; $notice = '';
     if ($woId) {
@@ -4536,7 +4875,7 @@ if ($p === 'workouts') {
 
 /* ================= ADMINISTRATION (comptes) ================= */
 if ($p === 'admin') {
-    head('Administration', 'admin');
+    head(t('Administration'), 'admin');
     if (!auth_enabled() || !is_admin()) { echo '<div class="alert" data-variant="destructive"><h2>Accès réservé aux administrateurs.</h2></div>'; foot(); exit; }
     $users = auth_users_list(); $regMode = (string)trq_config('registration');
     ?>
@@ -4570,7 +4909,7 @@ if ($p === 'admin') {
 }
 
 if ($p === 'zones') {
-    head('Zones d’entraînement', 'zones');
+    head(t('Zones d’entraînement'), 'zones');
     $lthr = (float)cfg('lthr', 0);
     $runThrPace = (int)cfg('run_thr_pace', 0);
 
@@ -4691,7 +5030,7 @@ if ($p === 'zones') {
    PROGRESSION (RAPPORT HEBDO / EFFICIENCE / RECORDS)
    ======================================================== */
 if ($p === 'progress') {
-    head('Progression', 'progress');
+    head(t('Progression'), 'progress');
     if (!$count) { empty_state(); foot(); exit; }
 
     $wks = array_values(progress_weeks(10));
@@ -4952,7 +5291,7 @@ if ($p === 'progress') {
    PARAMÈTRES (SETTINGS)
    ======================================================== */
 if ($p === 'settings') {
-    head('Paramètres', 'settings');
+    head(t('Paramètres'), 'settings');
     $pt = (int)cfg('run_thr_pace', 0);
     $f = fn($k, $d = '') => h(cfg($k, $d));
     ?>
@@ -4969,11 +5308,22 @@ if ($p === 'settings') {
           <h3 class="text-base font-semibold">Apparence</h3>
           <p class="text-xs text-muted-foreground">Style de l'interface (Basecoat) — appliqué immédiatement, mémorisé sur cet appareil</p>
         </header>
-        <div class="field max-w-56">
-          <label class="text-xs font-medium">Style</label>
-          <select id="styleSel" class="select h-9 text-sm">
-            <?php foreach (['vega', 'nova', 'maia', 'lyra', 'mira', 'luma', 'sera', 'rhea'] as $s) echo '<option value="' . $s . '">' . ucfirst($s) . '</option>'; ?>
-          </select>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div class="field">
+            <label class="text-xs font-medium">Style</label>
+            <select id="styleSel" class="select h-9 text-sm">
+              <?php foreach (['vega', 'nova', 'maia', 'lyra', 'mira', 'luma', 'sera', 'rhea'] as $s) echo '<option value="' . $s . '">' . ucfirst($s) . '</option>'; ?>
+            </select>
+          </div>
+          <form method="post" action="?p=settings" class="field">
+            <label class="text-xs font-medium" for="langSel">Langue / Language</label>
+            <select id="langSel" name="lang" class="select h-9 text-sm" onchange="this.form.submit()">
+              <?php foreach (trq_langs() as $trqLc => $trqLn): ?>
+              <option value="<?= $trqLc ?>"<?= trq_lang() === $trqLc ? ' selected' : '' ?>><?= htmlspecialchars($trqLn, ENT_QUOTES, 'UTF-8') ?></option>
+              <?php endforeach; ?>
+            </select>
+            <noscript><button class="btn mt-2" data-size="sm" type="submit">OK</button></noscript>
+          </form>
         </div>
       </div>
 
@@ -4988,6 +5338,10 @@ if ($p === 'settings') {
         <div class="alert"><h3>Bienvenue sur TRQ 👋</h3><p class="text-xs text-muted-foreground">Pour commencer : renseignez votre clé API intervals.icu et vos seuils ci-dessous, enregistrez, puis lancez « Synchroniser ». Vous pouvez aussi générer des données de démonstration depuis le tableau de bord.</p></div>
       <?php endif; ?>
 
+      <?php if (isset($_GET['err'])): ?>
+        <div class="alert" data-variant="destructive"><h2><?= h((string)$_GET['err']) ?></h2></div>
+      <?php endif; ?>
+
       <?php if (auth_enabled()): $cu = current_user(); ?>
       <div class="card p-6 space-y-4">
         <header class="flex items-start justify-between gap-3">
@@ -4995,6 +5349,18 @@ if ($p === 'settings') {
             <p class="text-xs text-muted-foreground"><?= h($cu['name']) ?> · <?= h($cu['email']) ?> · <?= $cu['role'] === 'admin' ? 'administrateur' : 'utilisateur' ?></p></div>
           <form method="post" action="login.php?a=logout"><button class="btn" data-variant="outline" data-size="sm" type="submit">Se déconnecter</button></form>
         </header>
+        <form method="post" enctype="multipart/form-data" action="?p=settings" class="flex flex-wrap items-center gap-3">
+          <input type="hidden" name="avatar_post" value="1">
+          <?php $av = avatar_info(); ?>
+          <?php if ($av): ?><img class="size-12 rounded-full object-cover border" alt="" src="?p=avatar&v=<?= (int)$av['ts'] ?>"><?php else: ?><span class="flex size-12 shrink-0 items-center justify-center rounded-full bg-primary text-lg font-semibold text-primary-foreground"><?= h(mb_strtoupper(mb_substr(trim((string)$cu['name']) ?: '?', 0, 1))) ?></span><?php endif; ?>
+          <div class="min-w-0">
+            <p class="text-sm font-medium">Photo de profil</p>
+            <p class="text-xs text-muted-foreground">JPEG, PNG, WebP ou GIF · 4 Mo max · recadrée en carré 256px si possible</p>
+          </div>
+          <input class="input h-9 w-auto max-w-full text-sm" type="file" name="avatar_file" accept="image/jpeg,image/png,image/webp,image/gif">
+          <button class="btn" data-size="sm" type="submit">Enregistrer la photo</button>
+          <?php if ($av): ?><button class="btn" data-variant="ghost" data-size="sm" type="submit" name="avatar_remove" value="1">Supprimer</button><?php endif; ?>
+        </form>
         <div class="grid gap-3 sm:grid-cols-3">
           <div class="field"><label class="text-xs font-medium">Mot de passe actuel</label><input class="input text-sm" type="password" id="pwCur" autocomplete="current-password"></div>
           <div class="field"><label class="text-xs font-medium">Nouveau mot de passe</label><input class="input text-sm" type="password" id="pwNew" autocomplete="new-password"></div>
@@ -5147,7 +5513,7 @@ if ($p === 'settings') {
    PAGE NUTRITION — cibles issues du statement UCI 2026
    ======================================================== */
 if ($p === 'nutrition') {
-    head('Nutrition', 'nutrition');
+    head(t('Nutrition'), 'nutrition');
     $kg = nutrition_weight();
     $bfRaw = cfg('body_fat');
     $bf = ($bfRaw !== null && (float)$bfRaw > 0) ? (float)$bfRaw : null;
@@ -5319,7 +5685,7 @@ if ($p === 'nutrition') {
 }
 
 http_response_code(404);
-head('Page introuvable', '');
+head(t('Page introuvable'), '');
 echo '<div class="card p-8 text-center max-w-md mx-auto my-12">';
 echo '<h2 class="text-xl font-bold">Page introuvable</h2>';
 echo '<p class="text-sm text-muted-foreground mt-2 mb-4">La page demandée n’existe pas.</p>';
