@@ -1030,9 +1030,13 @@ if ($p === 'dashboard') {
     <!-- KPIs -->
     <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
       <?php
-      stat_card('Forme (CTL)', n($cur['ctl'], 1), 'Rampe 7j : ' . sprintf('%+.1f', $cur['ctl'] - $prev['ctl']));
-      stat_card('Fatigue (ATL)', n($cur['atl'], 1), 'Moyenne 7 jours');
-      stat_card('Fraîcheur (TSB)', n($tsb, 1), '<span ' . $state[1] . '>' . $state[0] . '</span>');
+      $icoCtl = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>';
+      $icoAtl = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>';
+      $icoTsb = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2V9.6a4.6 4.6 0 0 1 7-3.9l1.4.9a2.5 2.5 0 0 0 2-.4z"/><path d="M2 12h13.5a2.5 2.5 0 0 1 0 5H12"/></svg>';
+      $chip = fn($svg, string $bg, string $fg) => '<span class="inline-flex items-center justify-center size-6 rounded-md shrink-0 ' . $bg . ' ' . $fg . '">' . $svg . '</span>';
+      stat_card('Forme (CTL)', '<span class="text-[#0f3ab2] dark:text-[#6b8cf0]">' . n($cur['ctl'], 1) . '</span>', 'Rampe 7j : ' . sprintf('%+.1f', $cur['ctl'] - $prev['ctl']), $chip($icoCtl, 'bg-[#0f3ab2]/10', 'text-[#0f3ab2] dark:text-[#6b8cf0]'));
+      stat_card('Fatigue (ATL)', '<span class="text-rose-600 dark:text-rose-400">' . n($cur['atl'], 1) . '</span>', 'Moyenne 7 jours', $chip($icoAtl, 'bg-rose-500/10', 'text-rose-600 dark:text-rose-400'));
+      stat_card('Fraîcheur (TSB)', '<span class="text-amber-600 dark:text-amber-400">' . n($tsb, 1) . '</span>', '<span ' . $state[1] . '>' . $state[0] . '</span>', $chip($icoTsb, 'bg-amber-500/10', 'text-amber-600 dark:text-amber-400'));
       stat_card('7 derniers jours', n($w7['t']) . ' TSS', fmt_dur((int)$w7['d']) . ' · ' . n($w7['km'] / 1000) . ' km');
       stat_card('FTP réglé', n($ftp) . ' W', $weight ? n($ftp / $weight, 2) . ' W/kg' : 'Poids non défini');
       if ($todayWell) {
@@ -1239,9 +1243,10 @@ if ($p === 'dashboard') {
         if (!card) return;
         if (!PM_KEYS.length) { card.querySelector('section').innerHTML = '<p class="py-12 text-center text-sm text-muted-foreground">Pas encore de données de charge.</p>'; return; }
         const dark = document.documentElement.classList.contains('dark');
+        /* Couleurs de la référence : forme (CTL) = bleu de l'app · fatigue (ATL) = rouge rosé · fraîcheur (TSB) = orange */
         const C = dark
-            ? {ctl: '#38bdf8', atl: '#fb7340', bar: 'rgba(56,120,170,.40)', grid: 'rgba(148,163,184,.13)', txt: '#7b8aa0'}
-            : {ctl: '#0284c7', atl: '#ea580c', bar: 'rgba(2,132,199,.25)', grid: 'rgba(100,116,139,.20)', txt: '#64748b'};
+            ? {ctl: '#6b8cf0', atl: '#fb7185', tsb: '#f59e0b', bar: 'rgba(61,98,224,.35)', grid: 'rgba(148,163,184,.13)', txt: '#7b8aa0'}
+            : {ctl: '#0f3ab2', atl: '#e11d48', tsb: '#d97706', bar: 'rgba(15,58,178,.22)', grid: 'rgba(100,116,139,.20)', txt: '#64748b'};
         card.style.setProperty('--pmc-ctl', C.ctl); card.style.setProperty('--pmc-atl', C.atl); card.style.setProperty('--pmc-bar', C.bar);
         const ZONES = [   // seuils TSB de Coggan
             {label: 'Transition', from: 25, to: Infinity, color: dark ? '#38bdf8' : '#0284c7'},
@@ -1334,7 +1339,7 @@ if ($p === 'dashboard') {
             bot = new Chart('tsb', {
                 type: 'line',
                 data: {labels: keys, datasets: [{label: 'TSB (fraîcheur)', data: tsb, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 4, cubicInterpolationMode: 'monotone',
-                    borderColor: C.txt, segment: {borderColor: ctx => zoneOf((ctx.p0.parsed.y + ctx.p1.parsed.y) / 2).color},
+                    borderColor: C.tsb, segment: {borderColor: ctx => zoneOf((ctx.p0.parsed.y + ctx.p1.parsed.y) / 2).color},
                     pointHoverBackgroundColor: ctx => zoneOf(tsb[ctx.dataIndex] ?? 0).color}]},
                 options: {...common,
                     onHover: (e, els) => syncTo(top)(e, els),
@@ -2059,14 +2064,13 @@ if ($p === 'activity') {
           <p class="text-xs text-muted-foreground">Valeurs extrêmes et moyennes issues des flux de la sortie</p>
         </header>
         <section class="divide-y">
-          <?php foreach ($mesures as $m): if ($m[2] === null && $m[3] === null && $m[4] === null) continue; ?>
-          <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 text-sm">
-            <span class="flex items-center gap-2 font-medium"><span class="text-muted-foreground"><?= $m[1] ?></span><?= h($m[0]) ?></span>
-            <span class="tabular-nums text-muted-foreground"><?php
-              $parts = [];
+          <?php foreach ($mesures as $m): if ($m[2] === null && $m[3] === null && $m[4] === null) continue; $parts = [];
               if ($m[2] !== null) $parts[] = 'Min <b class="font-semibold text-foreground">' . h($m[2]) . '</b>';
               if ($m[3] !== null) $parts[] = 'Moy <b class="font-semibold text-foreground">' . h($m[3]) . '</b>';
-              if ($m[4] !== null) $parts[] = 'Max <b class="font-semibold text-foreground">' . h($m[4]) . '</b>';
+              if ($m[4] !== null) $parts[] = 'Max <b class="font-semibold text-foreground">' . h($m[4]) . '</b>'; ?>
+          <div class="grid gap-1 px-4 py-3 text-sm sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+            <span class="flex items-center gap-2 font-medium"><span class="text-muted-foreground"><?= $m[1] ?></span><?= h($m[0]) ?></span>
+            <span class="tabular-nums text-muted-foreground whitespace-nowrap sm:text-right"><?php
               echo implode(' <span class="mx-1 text-border">·</span> ', $parts);
             ?></span>
           </div>
