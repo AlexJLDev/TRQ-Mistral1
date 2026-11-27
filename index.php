@@ -1028,43 +1028,43 @@ if ($p === 'dashboard') {
     </div>
 
     <!-- KPIs : 3 cartes métriques avec sparkline (Forme bleu app · Fatigue rouge rosé · Fraîcheur orange) -->
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
       <?php
       $icoCtl = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>';
       $icoAtl = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>';
       $icoTsb = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2V9.6a4.6 4.6 0 0 1 7-3.9l1.4.9a2.5 2.5 0 0 0 2-.4z"/><path d="M2 12h13.5a2.5 2.5 0 0 1 0 5H12"/></svg>';
-      $chip = fn($svg, string $bg, string $fg) => '<span class="inline-flex items-center justify-center size-6 rounded-md shrink-0 ' . $bg . ' ' . $fg . '">' . $svg . '</span>';
+      $chip = fn($svg, string $bg, string $fg) => '<span class="hidden sm:inline-flex items-center justify-center size-6 rounded-md shrink-0 ' . $bg . ' ' . $fg . '">' . $svg . '</span>';
       $dCtl = $cur['ctl'] - $prev['ctl']; $dAtl = $cur['atl'] - $prev['atl']; $dTsb = $tsb - $prev['tsb'];
       $tr = fn($d) => '<span class="inline-flex items-center gap-1 text-[11px] font-semibold ' . ($d >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500 dark:text-rose-400') . '">' . ($d >= 0 ? '▲ +' : '▼ −') . n(abs($d), 1) . '<span class="font-normal text-muted-foreground">7j</span></span>';
-      $spark = fn(string $id) => '<div class="mt-2 h-10 -mx-1"><canvas id="' . $id . '" aria-hidden="true"></canvas></div>';
+      $spark = fn(string $id) => '<div class="mt-1.5 h-8 sm:mt-2 sm:h-10 -mx-1"><canvas id="' . $id . '" aria-hidden="true"></canvas></div>';
       ?>
-      <div class="card p-4">
+      <div class="card p-3 sm:p-4">
         <div class="flex items-start justify-between gap-2">
           <div class="min-w-0">
-            <p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Forme (CTL)</p>
-            <p class="mt-1 text-2xl font-bold tabular-nums text-[#0f3ab2] dark:text-[#6b8cf0]"><?= n($cur['ctl'], 1) ?></p>
+            <p class="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Forme (CTL)</p>
+            <p class="mt-0.5 sm:mt-1 text-lg sm:text-2xl font-bold tabular-nums text-[#0f3ab2] dark:text-[#6b8cf0]"><?= n($cur['ctl'], 1) ?></p>
             <p class="mt-0.5"><?= $tr($dCtl) ?></p>
           </div>
           <?= $chip($icoCtl, 'bg-[#0f3ab2]/10', 'text-[#0f3ab2] dark:text-[#6b8cf0]') ?>
         </div>
         <?= $spark('sparkCtl') ?>
       </div>
-      <div class="card p-4">
+      <div class="card p-3 sm:p-4">
         <div class="flex items-start justify-between gap-2">
           <div class="min-w-0">
-            <p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Fatigue (ATL)</p>
-            <p class="mt-1 text-2xl font-bold tabular-nums text-rose-600 dark:text-rose-400"><?= n($cur['atl'], 1) ?></p>
+            <p class="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Fatigue (ATL)</p>
+            <p class="mt-0.5 sm:mt-1 text-lg sm:text-2xl font-bold tabular-nums text-rose-600 dark:text-rose-400"><?= n($cur['atl'], 1) ?></p>
             <p class="mt-0.5"><?= $tr($dAtl) ?></p>
           </div>
           <?= $chip($icoAtl, 'bg-rose-500/10', 'text-rose-600 dark:text-rose-400') ?>
         </div>
         <?= $spark('sparkAtl') ?>
       </div>
-      <div class="card p-4">
+      <div class="card p-3 sm:p-4">
         <div class="flex items-start justify-between gap-2">
           <div class="min-w-0">
-            <p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Fraîcheur (TSB)</p>
-            <p class="mt-1 text-2xl font-bold tabular-nums text-amber-600 dark:text-amber-400"><?= n($tsb, 1) ?></p>
+            <p class="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Fraîcheur (TSB)</p>
+            <p class="mt-0.5 sm:mt-1 text-lg sm:text-2xl font-bold tabular-nums text-amber-600 dark:text-amber-400"><?= n($tsb, 1) ?></p>
             <p class="mt-0.5"><?= '<span ' . $state[1] . '>' . $state[0] . '</span>' ?></p>
           </div>
           <?= $chip($icoTsb, 'bg-amber-500/10', 'text-amber-600 dark:text-amber-400') ?>
